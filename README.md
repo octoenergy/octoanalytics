@@ -5,8 +5,6 @@
 <h1 align="center">octoanalytics</h1>
 
 
-# octoanalytics
-
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **octoanalytics** is an Python package by **Octopus Energy** that provides tools for quantitative analysis and risk calculation on energy data. It helps to analyze time series energy consumption data, extract relevant features, and predict future consumption using machine learning models.
