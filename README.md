@@ -5,7 +5,7 @@
 <h1 align="center">octoanalytics</h1>
 
 
-# PowerQuant
+# octoanalytics
 
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
