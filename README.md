@@ -2,8 +2,6 @@
   <img src="images/logo_octoanalytics.png" alt="octoanalytics logo" width="200"/>
 </p>
 
-<h1 align="center">octoanalytics</h1>
-
 
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
