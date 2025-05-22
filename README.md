@@ -38,7 +38,7 @@ Dependencies such as `pandas`, `numpy`, `scikit-learn`, `holidays`, `plotly`, `t
 ### Importing the package
 
 ```python
-from octoanalytics import eval_forecast, plot_forecast, calculate_mape, get_temperature_lissee_france, get_spot_price_fr, get_forward_price_fr, get_pfc_fr, calculate_prem_risk_vol
+from octoanalytics import eval_forecast, plot_forecast, calculate_mape, get_temp_smoothed_fr, get_spot_price_fr, get_forward_price_fr, get_pfc_fr, calculate_prem_risk_vol
 ```
 
 ### Data format for forecasting
@@ -90,7 +90,7 @@ print(f"MAPE: {mape_value:.2f}%")
 ### Retrieve smoothed temperature data for France
 
 ```python
-temp_df = get_temperature_lissee_france('2025-01-01', '2025-01-31')
+temp_df = get_temp_smoothed_fr('2025-01-01', '2025-01-31')
 print(temp_df.head())
 ```
 
@@ -139,7 +139,7 @@ Returns the MAPE between actual and predicted consumption using the forecasting 
 
 ---
 
-### `get_temperature_lissee_france(start_date, end_date)`
+### `get_temp_smoothed_fr(start_date, end_date)`
 
 Fetches hourly smoothed temperatures averaged over multiple major French cities.
 

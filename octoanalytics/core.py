@@ -30,15 +30,15 @@ from dotenv import load_dotenv
 
 
 
-def get_temperature_lissee_france(start_date: str, end_date: str) -> pd.DataFrame:
+def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
     """
-    Récupère les températures horaires moyennes 'lissées' sur plusieurs grandes villes françaises.
-    
-    :param start_date: Date de début (format 'YYYY-MM-DD')
-    :param end_date: Date de fin (format 'YYYY-MM-DD')
-    :return: DataFrame avec colonnes ['datetime', 'temperature']
+    Retrieves smoothed hourly average temperatures across several major French cities.
+
+    :param start_date: Start date (format 'YYYY-MM-DD')
+    :param end_date: End date (format 'YYYY-MM-DD')
+    :return: DataFrame with columns ['datetime', 'temperature']
     """
-    # Villes choisies pour lisser à l’échelle nationale
+    # Selected cities to smooth data at a national scale
     cities = {
         "Paris": (48.85, 2.35),
         "Lyon": (45.76, 4.84),
@@ -52,7 +52,7 @@ def get_temperature_lissee_france(start_date: str, end_date: str) -> pd.DataFram
 
     city_dfs = []
 
-    for city, (lat, lon) in tqdm(cities.items(), desc="Récupération des villes"):
+    for city, (lat, lon) in tqdm(cities.items(), desc="Fetching city data"):
         url = "https://archive-api.open-meteo.com/v1/archive"
         params = {
             "latitude": lat,
@@ -74,37 +74,37 @@ def get_temperature_lissee_france(start_date: str, end_date: str) -> pd.DataFram
             df.set_index('datetime', inplace=True)
             city_dfs.append(df)
         except Exception as e:
-            print(f"Erreur avec {city}: {e}")
+            print(f"Error with {city}: {e}")
 
-    # Fusion et moyenne
+    # Merge all city data and compute the mean temperature
     df_all = pd.concat(city_dfs, axis=1)
     df_all['temperature'] = df_all.mean(axis=1)
 
-    # Retourner seulement datetime + temperature
+    # Return only datetime and the averaged temperature
     return df_all[['temperature']].reset_index()
 
 
 def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
-    # 1. Harmoniser les formats de dates et nettoyer les NaN
+    # 1. Standardize date formats and clean NaN values
     df = df.copy()
     df[datetime_col] = pd.to_datetime(df[datetime_col], errors='coerce').dt.tz_localize(None)
     df = df.dropna(subset=[datetime_col, target_col])
-    
-    # 2. Trier les données et découper en deux
+
+    # 2. Sort the data and split into two halves
     df = df.sort_values(datetime_col)
     midpoint = len(df) // 2
     train_df = df.iloc[:midpoint]
     test_df = df.iloc[midpoint:]
 
-    # 3. Récupérer les températures lissées
+    # 3. Retrieve smoothed temperatures
     full_start = df[datetime_col].min().strftime('%Y-%m-%d')
     full_end = df[datetime_col].max().strftime('%Y-%m-%d')
 
-    temp_df = get_temperature_lissee_france(full_start, full_end)
+    temp_df = get_temp_smoothed_fr(full_start, full_end)
     temp_df = temp_df.rename(columns={'datetime': datetime_col})
     temp_df[datetime_col] = pd.to_datetime(temp_df[datetime_col], errors='coerce')
 
-    # 4. Fusionner température avec train/test
+    # 4. Merge temperature data with train/test sets
     train_df = pd.merge(train_df, temp_df, on=datetime_col, how='left')
     test_df = pd.merge(test_df, temp_df, on=datetime_col, how='left')
 
@@ -123,14 +123,14 @@ def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
     train_df = add_time_features(train_df)
     test_df = add_time_features(test_df)
 
-    # 6. Définir X et y
+    # 6. Define X and y
     features = ['hour', 'dayofweek', 'week', 'month', 'year', 'is_weekend', 'is_holiday', 'temperature']
     X_train = train_df[features]
     y_train = train_df[target_col]
     X_test = test_df[features]
-    y_test = test_df[target_col]  # utile pour évaluer plus tard
+    y_test = test_df[target_col]  # useful for later evaluation
 
-    # 7. Imputation et normalisation
+    # 7. Imputation and normalization
     imputer = SimpleImputer(strategy='mean')
     X_train = imputer.fit_transform(X_train)
     X_test = imputer.transform(X_test)
@@ -139,11 +139,11 @@ def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
 
-    # 8. Entraîner le modèle
+    # 8. Train the model
     model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
     model.fit(X_train, y_train)
 
-    # 9. Prédictions
+    # 9. Make predictions
     y_pred = model.predict(X_test)
     test_df = test_df.copy()
     test_df['forecast'] = y_pred
@@ -152,40 +152,40 @@ def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
 
 
 def plot_forecast(df, datetime_col='datetime', target_col='consumption'):
-    # 1. Appeler eval_forecast
+    # 1. Call eval_forecast
     forecast_df = eval_forecast(df, datetime_col=datetime_col, target_col=target_col)
 
-    # 2. Calcul de la MAPE
+    # 2. Calculate MAPE
     y_true = forecast_df[target_col].values
     y_pred = forecast_df['forecast'].values
     mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
-    # 3. Créer le graphique interactif
+    # 3. Create the interactive plot
     fig = go.Figure()
 
-    # Série réelle
+    # Actual values series
     fig.add_trace(go.Scatter(
         x=forecast_df[datetime_col],
         y=forecast_df[target_col],
         mode='lines',
-        name='Réalisé',
+        name='Actual',
         line=dict(color='blue')
     ))
 
-    # Série prévisionnelle
+    # Forecast series
     fig.add_trace(go.Scatter(
         x=forecast_df[datetime_col],
         y=forecast_df['forecast'],
         mode='lines',
-        name='Prévision',
+        name='Forecast',
         line=dict(color='red', dash='dash')
     ))
 
-    # 4. Mise en page avec fond noir
+    # 4. Layout with black background
     fig.update_layout(
-        title='Prévision de la consommation vs Réalité',
+        title='Forecast vs Actual Consumption',
         xaxis_title='Date',
-        yaxis=dict(title='Consommation', color='white', gridcolor='gray'),
+        yaxis=dict(title='Consumption', color='white', gridcolor='gray'),
         xaxis=dict(color='white', gridcolor='gray'),
         legend=dict(x=0.01, y=0.99, font=dict(color='white')),
         hovermode='x unified',
@@ -193,50 +193,49 @@ def plot_forecast(df, datetime_col='datetime', target_col='consumption'):
         plot_bgcolor='black',
         paper_bgcolor='black',
         font=dict(color='white'),
-        margin=dict(t=120)  # augmenter l’espace en haut
+        margin=dict(t=120)  # increase top margin
     )
 
-    # 5. Ajouter la MAPE en haut centré
+    # 5. Add MAPE at the top center
     fig.add_annotation(
-        text=f"MAPE : {mape:.2f}%",
+        text=f"MAPE: {mape:.2f}%",
         xref="paper", yref="paper",
-        x=0.5, y=1,  # légèrement au-dessus du titre
+        x=0.5, y=1,  # slightly above the title
         showarrow=False,
         font=dict(size=14, color="white"),
         align="center"
     )
 
-    # 6. Afficher
+    # 6. Show the plot
     fig.show()
 
 
 def calculate_mape(df, datetime_col='datetime', target_col='consumption'):
-    # 1. Calculer les prévisions avec eval_forecast
+    # 1. Compute forecasts using eval_forecast
     forecast_df = eval_forecast(df, datetime_col=datetime_col, target_col=target_col)
-    
-    # 2. Extraire les valeurs réelles et prédites
+
+    # 2. Extract actual and predicted values
     y_true = forecast_df[target_col]
     y_pred = forecast_df['forecast']
-    
-    # 3. Calculer la MAPE (en %)
+
+    # 3. Calculate MAPE (as a percentage)
     mape_value = mean_absolute_percentage_error(y_true, y_pred) * 100
-    
+
     return mape_value
 
 
-def get_spot_price_fr(token: str, start_date: str, end_date: str) :
-    
+def get_spot_price_fr(token: str, start_date: str, end_date: str):
     """
-    Récupère les prix spot de l'électricité en France depuis Databricks (EPEX spot).
+    Retrieves electricity spot prices in France from Databricks (EPEX spot).
 
-    :param token: Token personnel Databricks, attendu sous forme de chaîne de caractères (string).
-    :param start_date: Date de début au format 'YYYY-MM-DD'.
-    :param end_date: Date de fin au format 'YYYY-MM-DD'.
-    :return: DataFrame avec les colonnes ['delivery_from', 'price_eur_per_mwh'].
+    :param token: Databricks personal access token, as a string.
+    :param start_date: Start date in 'YYYY-MM-DD' format.
+    :param end_date: End date in 'YYYY-MM-DD' format.
+    :return: DataFrame with columns ['delivery_from', 'price_eur_per_mwh'].
     """
     databricks_url = f"databricks+thrift://{token}@octoenergy-oefr-prod.cloud.databricks.com?HTTPPath=/sql/1.0/warehouses/ddb864eabbe6b908"
 
-    with tqdm(total=1, desc="Chargement des prix spot depuis Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
+    with tqdm(total=1, desc="Loading spot prices from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
         with tio.db(databricks_url) as client:
             query = f"""
                 SELECT delivery_from, price_eur_per_mwh
@@ -247,27 +246,26 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) :
             spot_df = client.get_df(query)
             pbar.update(1)
 
-    # Nettoyage / typage
+    # Cleaning / typing
     spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from'], utc=True).dt.tz_localize(None)
     spot_df['price_eur_per_mwh'] = spot_df['price_eur_per_mwh'].astype(float)
 
     return spot_df
 
-
 def get_forward_price_fr(token: str, cal_year: int) -> pd.DataFrame:
     """
-    Récupère les prix forward annuels de l'électricité en France pour une année donnée depuis Databricks (EEX).
+    Retrieves annual forward electricity prices in France for a given year from Databricks (EEX).
 
-    :param token: Token personnel Databricks.
-    :param cal_year: Année calendaire de livraison souhaitée (ex: 2026).
-    :return: DataFrame avec les colonnes ['trading_date', 'setllement_price', 'cal_year'].
+    :param token: Databricks personal access token.
+    :param cal_year: Calendar year for delivery (e.g., 2026).
+    :return: DataFrame with columns ['trading_date', 'forward_price', 'cal_year'].
     """
     databricks_url = (
         f"databricks+thrift://{token}@octoenergy-oefr-prod.cloud.databricks.com"
         "?HTTPPath=/sql/1.0/warehouses/ddb864eabbe6b908"
     )
 
-    with tqdm(total=1, desc="Chargement des prix forward depuis Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
+    with tqdm(total=1, desc="Loading forward prices from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
         with tio.db(databricks_url) as client:
             query = f"""
                 SELECT setllement_price, trading_date
@@ -280,7 +278,7 @@ def get_forward_price_fr(token: str, cal_year: int) -> pd.DataFrame:
             forward_df = client.get_df(query)
             pbar.update(1)
 
-    # Nettoyage / typage
+    # Cleaning / typing
     forward_df.rename(columns={'setllement_price': 'forward_price'}, inplace=True)
     forward_df['trading_date'] = pd.to_datetime(forward_df['trading_date'], utc=True)
     forward_df['forward_price'] = forward_df['forward_price'].astype(float)
@@ -288,22 +286,21 @@ def get_forward_price_fr(token: str, cal_year: int) -> pd.DataFrame:
 
     return forward_df
 
-
 def get_pfc_fr(token: str, cal_year: int) -> pd.DataFrame:
     """
-    Récupère la courbe Price Forward Curve (PFC) de l'électricité en France pour une année calendaire donnée,
-    depuis Databricks (EEX).
+    Retrieves the Price Forward Curve (PFC) of electricity in France for a given calendar year,
+    from Databricks (EEX).
 
-    :param token: Token personnel Databricks.
-    :param cal_year: Année calendaire de livraison souhaitée (ex: 2026).
-    :return: DataFrame indexé en datetime hourly avec colonnes ['forward_price', 'cal_year'].
+    :param token: Databricks personal access token.
+    :param cal_year: Calendar year for delivery (e.g., 2026).
+    :return: Hourly-indexed DataFrame with columns ['pfc_forward_price', 'cal_year'].
     """
     databricks_url = (
         f"databricks+thrift://{token}@octoenergy-oefr-prod.cloud.databricks.com"
         "?HTTPPath=/sql/1.0/warehouses/ddb864eabbe6b908"
     )
 
-    with tqdm(total=1, desc="Chargement de la courbe PFC depuis Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
+    with tqdm(total=1, desc="Loading PFC curve from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
         with tio.db(databricks_url) as client:
             query = f"""
                 SELECT 
@@ -324,72 +321,70 @@ def get_pfc_fr(token: str, cal_year: int) -> pd.DataFrame:
             pfc = client.get_df(query)
             pbar.update(1)
 
-    
     pfc.rename(columns={'setllement_price': 'forward_price'}, inplace=True)
 
-    # Conversion des types
+    # Type conversion
     pfc['time_utc'] = pd.to_datetime(pfc['time_utc'], utc=True)
     pfc['pfc_forward_price'] = pfc['pfc_forward_price'].astype(float)
 
-    # Resample à fréquence horaire et calcul de la moyenne
+    # Resample to hourly frequency and compute mean
     pfc = pfc.set_index('time_utc').resample('H').mean()
 
-    # Ajout de la colonne cal_year pour référence
+    # Add cal_year column for reference
     pfc['cal_year'] = cal_year
 
     return pfc
 
-
-def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: str, target_col: str, plot_chart: bool = False, quantile: int = 50 ) -> float:
+def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: str, target_col: str, plot_chart: bool = False, quantile: int = 50) -> float:
     """
-    Calcule un premium de risque basé sur plusieurs prix forward,
-    et retourne la valeur correspondant au quantile spécifié.
+    Calculates a risk premium based on multiple forward prices,
+    and returns the value corresponding to the specified quantile.
 
-    :param token: Token Databricks.
-    :param input_df: DataFrame contenant les données de consommation.
-    :param datetime_col: Nom de la colonne datetime dans input_df.
-    :param target_col: Nom de la colonne de consommation réalisée dans input_df.
-    :param plot_chart: Si True, affiche la distribution des premiums.
-    :param quantile: Quantile à retourner (entre 1 et 100).
-    :return: Premium de risque correspondant au quantile demandé.
+    :param token: Databricks token.
+    :param input_df: DataFrame containing consumption data.
+    :param datetime_col: Name of the datetime column in input_df.
+    :param target_col: Name of the actual consumption column in input_df.
+    :param plot_chart: If True, displays the premium distribution chart.
+    :param quantile: Quantile to return (between 1 and 100).
+    :return: Risk premium corresponding to the requested quantile.
     """
-    # 1. Évaluation de la prévision
+    # 1. Forecast evaluation
     forecast_df = eval_forecast(input_df, datetime_col=datetime_col, target_col=target_col)
     forecast_df[datetime_col] = pd.to_datetime(forecast_df[datetime_col])
-    
-    # 2. Déterminer l'année majoritaire
+
+    # 2. Determine the dominant year
     year_counts = forecast_df[datetime_col].dt.year.value_counts()
     if year_counts.empty:
-        raise ValueError("Pas de données valides dans eval_forecast.")
+        raise ValueError("No valid data in eval_forecast.")
     major_year = year_counts.idxmax()
-    print(f"Année majoritaire : {major_year} avec {year_counts.max()} occurrences")
+    print(f"Dominant year: {major_year} with {year_counts.max()} occurrences")
 
-    # 3. Récupération des prix spot pour la période couverte
+    # 3. Retrieve spot prices for the covered period
     start_date = forecast_df[datetime_col].min().strftime('%Y-%m-%d')
     end_date = forecast_df[datetime_col].max().strftime('%Y-%m-%d')
     spot_df = get_spot_price_fr(token, start_date, end_date)
     spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from'])
 
-    # 4. Récupération des prix forward pour l'année majoritaire
+    # 4. Retrieve forward prices for the dominant year
     forward_df = get_forward_price_fr(token, major_year)
     if forward_df.empty:
-        raise ValueError(f"Aucun prix forward trouvé pour l'année {major_year}")
+        raise ValueError(f"No forward prices found for year {major_year}")
     forward_prices = forward_df['forward_price'].tolist()
 
-    # 5. Préparer le dataframe pour la jointure
+    # 5. Prepare dataframe for merging
     forecast_df = forecast_df.rename(columns={datetime_col: 'datetime', target_col: 'consommation_realisee'})
     forecast_df = forecast_df[['datetime', 'consommation_realisee', 'forecast']]
     merged_df = pd.merge(forecast_df, spot_df, left_on='datetime', right_on='delivery_from', how='inner')
     if merged_df.empty:
-        raise ValueError("Aucune correspondance entre la conso et les prix spot")
+        raise ValueError("No match between consumption and spot prices")
 
-    # 6. Calcul une seule fois la consommation annuelle
+    # 6. Compute annual consumption once
     merged_df['diff_conso'] = merged_df['consommation_realisee'] - merged_df['forecast']
     conso_totale_MWh = merged_df['consommation_realisee'].sum()
     if conso_totale_MWh == 0:
-        raise ValueError("Consommation annuelle nulle, division impossible")
+        raise ValueError("Annual consumption is zero, division not possible")
 
-    # 7. Calcul des premiums pour chaque prix forward
+    # 7. Calculate premiums for each forward price
     premiums = []
     for fwd_price in forward_prices:
         merged_df['diff_price'] = merged_df['price_eur_per_mwh'] - fwd_price
@@ -397,7 +392,7 @@ def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: st
         premium = abs(merged_df['produit'].sum()) / conso_totale_MWh
         premiums.append(premium)
 
-    # 8. Optionnel : afficher le graphique
+    # 8. Optional: display chart
     if plot_chart:
         premiums_sorted = sorted(premiums)
         fig = go.Figure()
@@ -409,8 +404,8 @@ def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: st
             line=dict(color='cyan')
         ))
         fig.update_layout(
-            title="Distribution des premiums de risque volume",
-            xaxis_title="Index (classé)",
+            title="Risk premium distribution (volume)",
+            xaxis_title="Index (sorted)",
             yaxis_title="Premium",
             plot_bgcolor='black',
             paper_bgcolor='black',
@@ -419,9 +414,9 @@ def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: st
         )
         fig.show()
 
-    # 9. Retourner le quantile demandé
+    # 9. Return the requested quantile
     if not (1 <= quantile <= 100):
-        raise ValueError("Le quantile doit être un entier entre 1 et 100.")
+        raise ValueError("Quantile must be an integer between 1 and 100.")
     quantile_value = np.percentile(premiums, quantile)
     return quantile_value
 

@@ -1,4 +1,4 @@
-from octoanalytics import get_temperature_lissee_france
+from octoanalytics import get_temp_smoothed_fr
 from octoanalytics import eval_forecast
 from octoanalytics import plot_forecast
 from octoanalytics import calculate_mape
