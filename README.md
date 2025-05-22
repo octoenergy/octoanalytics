@@ -1,9 +1,4 @@
 
----
-title: "octoanalytics"
-author: "Jean Bertin"
-output: github_document
----
 
 <p align="center">
   <img src="images/logo_octoanalytics.png" alt="octoanalytics logo" width="200"/>
