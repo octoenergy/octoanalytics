@@ -7,7 +7,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
     long_description = "\n" + fh.read()
 
-VERSION = '0.0.1'
+VERSION = '0.0.3'
 DESCRIPTION = 'Quantitative analysis for power markets'
 LONG_DESCRIPTION = 'An internal Python package offering tools for quantitative & risk analysis on power markets.'
 
@@ -22,7 +22,12 @@ setup(
     long_description_content_type="text/markdown",
     long_description=long_description,
     packages=find_packages(),
-    install_requires=['pandas', 'numpy'],
+    install_requires=[
+        "pandas",
+        "numpy",
+        "scikit-learn",
+        "holidays"
+    ],
     keywords=['python', 'quantitative', 'risk', 'power', 'quant','octopusenergy'],
     classifiers=[
         "Development Status :: 1 - Planning",

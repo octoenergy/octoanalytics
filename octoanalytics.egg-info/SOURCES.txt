@@ -1,0 +1,11 @@
+LICENSE
+README.md
+setup.py
+octoanalytics/__init__.py
+octoanalytics/core.py
+octoanalytics.egg-info/PKG-INFO
+octoanalytics.egg-info/SOURCES.txt
+octoanalytics.egg-info/dependency_links.txt
+octoanalytics.egg-info/requires.txt
+octoanalytics.egg-info/top_level.txt
+tests/test_core.py
