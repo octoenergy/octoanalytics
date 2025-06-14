@@ -28,8 +28,6 @@ from dotenv import load_dotenv
 
 
 
-
-
 def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
     """
     Retrieves smoothed hourly average temperatures across several major French cities.
@@ -83,20 +81,31 @@ def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
     # Return only datetime and the averaged temperature
     return df_all[['temperature']].reset_index()
 
+def eval_forecast(df, datetime_col='datetime', target_col='consumption', keep_explanatory_variables= "No"):
 
-def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
-    # 1. Standardize date formats and clean NaN values
+    # Fixer reproductibilité
+    np.random.seed(42)
+    
+    # 1. Nettoyage et préparation
     df = df.copy()
     df[datetime_col] = pd.to_datetime(df[datetime_col], errors='coerce').dt.tz_localize(None)
     df = df.dropna(subset=[datetime_col, target_col])
+    df = df.sort_values(datetime_col).reset_index(drop=True)
 
-    # 2. Sort the data and split into two halves
-    df = df.sort_values(datetime_col)
-    midpoint = len(df) // 2
-    train_df = df.iloc[:midpoint]
-    test_df = df.iloc[midpoint:]
+    # 2. Split train / test avec minimum 365 jours sur le test
+    min_test_days = 373
 
-    # 3. Retrieve smoothed temperatures
+    total_days = (df[datetime_col].max() - df[datetime_col].min()).days
+    test_start_date = df[datetime_col].max() - pd.Timedelta(days=min_test_days)
+
+    if total_days < min_test_days:
+        print("Attention : pas assez de données pour constituer 365 jours de test. On ajuste au maximum disponible.")
+        test_start_date = df[datetime_col].min()
+
+    train_df = df[df[datetime_col] < test_start_date].reset_index(drop=True)
+    test_df = df[df[datetime_col] >= test_start_date].reset_index(drop=True)
+
+    # 3. Récupération température exogène
     full_start = df[datetime_col].min().strftime('%Y-%m-%d')
     full_end = df[datetime_col].max().strftime('%Y-%m-%d')
 
@@ -104,33 +113,49 @@ def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
     temp_df = temp_df.rename(columns={'datetime': datetime_col})
     temp_df[datetime_col] = pd.to_datetime(temp_df[datetime_col], errors='coerce')
 
-    # 4. Merge temperature data with train/test sets
+    # 4. Fusion température
     train_df = pd.merge(train_df, temp_df, on=datetime_col, how='left')
     test_df = pd.merge(test_df, temp_df, on=datetime_col, how='left')
 
-    # 5. Feature engineering
-    def add_time_features(df):
+    # 5. Feature engineering enrichi
+    def add_all_features(df):
         df['hour'] = df[datetime_col].dt.hour
         df['dayofweek'] = df[datetime_col].dt.dayofweek
         df['week'] = df[datetime_col].dt.isocalendar().week.astype(int)
         df['month'] = df[datetime_col].dt.month
         df['year'] = df[datetime_col].dt.year
         df['is_weekend'] = df['dayofweek'].apply(lambda x: 1 if x >= 5 else 0)
+
         fr_holidays = holidays.country_holidays('FR')
         df['is_holiday'] = df[datetime_col].dt.date.apply(lambda d: 1 if d in fr_holidays else 0)
+
+        df['cold_effect'] = df['temperature'].apply(lambda x: max(0, 15 - x))
+        df['heat_effect'] = df['temperature'].apply(lambda x: max(0, x - 20))
+
+        df['weekend_winter'] = df['is_weekend'] * df['month'].isin([12, 1, 2]).astype(int)
+
+        df = df.sort_values(datetime_col)
+        df['consumption_lag_1'] = df[target_col].shift(1)
+        df['consumption_lag_48'] = df[target_col].shift(48)
+        df['consumption_lag_336'] = df[target_col].shift(48 * 7)
+
         return df
 
-    train_df = add_time_features(train_df)
-    test_df = add_time_features(test_df)
+    train_df = add_all_features(train_df)
+    test_df = add_all_features(test_df)
 
-    # 6. Define X and y
-    features = ['hour', 'dayofweek', 'week', 'month', 'year', 'is_weekend', 'is_holiday', 'temperature']
+    train_df = train_df.dropna()
+    test_df = test_df.dropna()
+
+    features = ['hour', 'dayofweek', 'week', 'month', 'year', 'is_weekend', 'is_holiday',
+                'temperature', 'cold_effect', 'heat_effect', 'weekend_winter',
+                'consumption_lag_1', 'consumption_lag_48', 'consumption_lag_336']
+
     X_train = train_df[features]
     y_train = train_df[target_col]
     X_test = test_df[features]
-    y_test = test_df[target_col]  # useful for later evaluation
+    y_test = test_df[target_col]
 
-    # 7. Imputation and normalization
     imputer = SimpleImputer(strategy='mean')
     X_train = imputer.fit_transform(X_train)
     X_test = imputer.transform(X_test)
@@ -139,26 +164,54 @@ def eval_forecast(df, datetime_col='datetime', target_col='consumption'):
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
 
-    # 8. Train the model
-    model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
+    model = GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=7, random_state=42)
     model.fit(X_train, y_train)
 
-    # 9. Make predictions
     y_pred = model.predict(X_test)
-    test_df = test_df.copy()
     test_df['forecast'] = y_pred
 
-    return test_df
+    # Calcul du MAPE régularisé avec masque sur y_true == 0
+    y_true = y_test.values
+    mask = y_true != 0
+    mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+    print(f"MAPE régularisé (sans zéro) sur le jeu de test : {mape:.2f}%")
+
+    # 12. Reconstruction année civile
+    last_date = test_df[datetime_col].max()
+    target_year = last_date.year
+
+    jan1 = pd.Timestamp(f'{target_year}-01-01')
+    jan1_plus = test_df[test_df[datetime_col] >= jan1].copy()
+
+    missing_start = jan1
+    missing_end = pd.Timestamp(f'{target_year}-12-31')
+
+    previous_year_data = test_df[(test_df[datetime_col] >= missing_start - pd.DateOffset(years=1)) &
+                                  (test_df[datetime_col] <= missing_end - pd.DateOffset(years=1))].copy()
+
+    previous_year_data[datetime_col] = previous_year_data[datetime_col] + pd.DateOffset(years=1)
+
+    final_df = pd.concat([jan1_plus, previous_year_data], ignore_index=True)
+    final_df = final_df.sort_values(datetime_col).reset_index(drop=True)
+
+    # Si l'utilisateur ne veut pas garder les variables explicatives, on ne conserve que les colonnes principales
+    if keep_explanatory_variables == "No":
+        cols_to_keep = [datetime_col, target_col, 'forecast']
+        final_df = final_df[cols_to_keep]
+
+    return final_df
 
 
 def plot_forecast(df, datetime_col='datetime', target_col='consumption'):
     # 1. Call eval_forecast
     forecast_df = eval_forecast(df, datetime_col=datetime_col, target_col=target_col)
 
-    # 2. Calculate MAPE
+
+    # 2. Calculate MAPE (with zero protection)
     y_true = forecast_df[target_col].values
     y_pred = forecast_df['forecast'].values
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    mask = y_true != 0
+    mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
     # 3. Create the interactive plot
     fig = go.Figure()
@@ -208,21 +261,6 @@ def plot_forecast(df, datetime_col='datetime', target_col='consumption'):
 
     # 6. Show the plot
     fig.show()
-
-
-def calculate_mape(df, datetime_col='datetime', target_col='consumption'):
-    # 1. Compute forecasts using eval_forecast
-    forecast_df = eval_forecast(df, datetime_col=datetime_col, target_col=target_col)
-
-    # 2. Extract actual and predicted values
-    y_true = forecast_df[target_col]
-    y_pred = forecast_df['forecast']
-
-    # 3. Calculate MAPE (as a percentage)
-    mape_value = mean_absolute_percentage_error(y_true, y_pred) * 100
-
-    return mape_value
-
 
 def get_spot_price_fr(token: str, start_date: str, end_date: str):
     """
@@ -335,10 +373,12 @@ def get_pfc_fr(token: str, cal_year: int) -> pd.DataFrame:
 
     return pfc
 
-def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: str, target_col: str, plot_chart: bool = False, quantile: int = 50) -> float:
+def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: str, target_col: str, plot_chart: bool = False, quantile: int = 50, variability_factor: float = 1.1) -> float:
     """
     Calculates a risk premium based on multiple forward prices,
     and returns the value corresponding to the specified quantile.
+    Uses the year of the latest forecast date as the reference year.
+    Applies a variability factor to the consumption deviation.
 
     :param token: Databricks token.
     :param input_df: DataFrame containing consumption data.
@@ -346,40 +386,41 @@ def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: st
     :param target_col: Name of the actual consumption column in input_df.
     :param plot_chart: If True, displays the premium distribution chart.
     :param quantile: Quantile to return (between 1 and 100).
+    :param variability_factor: Factor to amplify volume deviation (default = 1.1).
     :return: Risk premium corresponding to the requested quantile.
     """
     # 1. Forecast evaluation
     forecast_df = eval_forecast(input_df, datetime_col=datetime_col, target_col=target_col)
     forecast_df[datetime_col] = pd.to_datetime(forecast_df[datetime_col])
 
-    # 2. Determine the dominant year
-    year_counts = forecast_df[datetime_col].dt.year.value_counts()
-    if year_counts.empty:
-        raise ValueError("No valid data in eval_forecast.")
-    major_year = year_counts.idxmax()
-    print(f"Dominant year: {major_year} with {year_counts.max()} occurrences")
+    # 2. Use the year of the latest available forecast date
+    latest_date = forecast_df[datetime_col].max()
+    latest_year = latest_date.year
+    print(f"Using year from latest date: {latest_year} (latest forecast: {latest_date.strftime('%Y-%m-%d')})")
 
     # 3. Retrieve spot prices for the covered period
     start_date = forecast_df[datetime_col].min().strftime('%Y-%m-%d')
     end_date = forecast_df[datetime_col].max().strftime('%Y-%m-%d')
     spot_df = get_spot_price_fr(token, start_date, end_date)
-    spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from'])
+    spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from']).dt.tz_localize(None)
 
-    # 4. Retrieve forward prices for the dominant year
-    forward_df = get_forward_price_fr(token, major_year)
+    # 4. Retrieve forward prices for the latest year
+    forward_df = get_forward_price_fr(token, latest_year)
     if forward_df.empty:
-        raise ValueError(f"No forward prices found for year {major_year}")
+        raise ValueError(f"No forward prices found for year {latest_year}")
     forward_prices = forward_df['forward_price'].tolist()
 
     # 5. Prepare dataframe for merging
     forecast_df = forecast_df.rename(columns={datetime_col: 'datetime', target_col: 'consommation_realisee'})
+    forecast_df['datetime'] = pd.to_datetime(forecast_df['datetime']).dt.tz_localize(None)
     forecast_df = forecast_df[['datetime', 'consommation_realisee', 'forecast']]
+
     merged_df = pd.merge(forecast_df, spot_df, left_on='datetime', right_on='delivery_from', how='inner')
     if merged_df.empty:
         raise ValueError("No match between consumption and spot prices")
 
-    # 6. Compute annual consumption once
-    merged_df['diff_conso'] = merged_df['consommation_realisee'] - merged_df['forecast']
+    # 6. Compute annual consumption
+    merged_df['diff_conso'] = (merged_df['consommation_realisee'] - merged_df['forecast']) * variability_factor
     conso_totale_MWh = merged_df['consommation_realisee'].sum()
     if conso_totale_MWh == 0:
         raise ValueError("Annual consumption is zero, division not possible")
@@ -419,6 +460,4 @@ def calculate_prem_risk_vol(token: str, input_df: pd.DataFrame, datetime_col: st
         raise ValueError("Quantile must be an integer between 1 and 100.")
     quantile_value = np.percentile(premiums, quantile)
     return quantile_value
-
-
 
