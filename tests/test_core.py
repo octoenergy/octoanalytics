@@ -23,8 +23,8 @@ my_token = os.environ["DATABRICKS_TOKEN"]
 
 # Testing the functions
 
-output = eval_forecast(input_df_c4, datetime_col='timestamp', target_col='MW',keep_explanatory_variables="Yes")
-output.to_csv('tests/data/output_C4_cdc_historique_WAAT.csv', index=False)
+output = eval_forecast(input_df_c4, datetime_col='timestamp', target_col='MW',keep_explanatory_variables="No")
+output.to_csv('tests/data/output_C4_cdc_historique_WAAT.csv', index=False, sep=';', encoding='utf-8')
 
 plot_forecast(input_df_c2, datetime_col='timestamp', target_col='MW')
 
