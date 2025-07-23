@@ -2,7 +2,7 @@ from octoanalytics import get_temp_smoothed_fr
 from octoanalytics import eval_forecast
 from octoanalytics import plot_forecast
 from octoanalytics import get_spot_price_fr
-from octoanalytics import get_forward_price_fr
+from octoanalytics import get_forward_price_fr_annual
 from octoanalytics import get_pfc_fr
 from octoanalytics import calculate_prem_risk_vol
 from octoanalytics import calculate_prem_risk_shape
@@ -26,25 +26,53 @@ OUTPUT_FOLDER = Path("Markets/TE13/premium_risk_charts/")     # sous-dossier d�
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)    # crée s'il n’existe pas
 
 
-# Load input data
+
+# 1. Année civile complète pour les prix spot et forward (entrée utilisateur)
+cal_year = 2024
+
+# 2. Charger les prix spot , forward  et la PFC sur l’année civile complète
+spot_df = get_spot_price_fr(my_token, start_date = f"{cal_year}-01-01", end_date = f"{cal_year}-12-31")
+forward_df = get_forward_price_fr_annual(my_token, cal_year=cal_year)
+pfc_df = get_pfc_fr(token=my_token, price_date= cal_year-1 , delivery_year=cal_year)
+
+
+# 3. Load input data
 input_data = pd.read_csv(INPUT_FOLDER / 'C2_ENT3_HCE_cdc_historique.csv')
+input_data['timestamp'] = pd.to_datetime(input_data['timestamp'], utc=True)
+print(input_data['timestamp'].dt.tz)  # sera None si naïf
+
+
+# 4. Charger les températures lissées France sur la période des deux années d'historique glissant
+temp_start_date = input_data['timestamp'].min().strftime('%Y-%m-%d')
+temp_end_date = input_data['timestamp'].max().strftime('%Y-%m-%d')
+temp_df = get_temp_smoothed_fr(temp_start_date, temp_end_date)
+
+# 5. Génerer le forecast sur l'année civile complète
+forecast_df = eval_forecast(input_data, temp_df=temp_df, cal_year=cal_year, datetime_col='timestamp', target_col='MW')
+forecast_df = forecast_df.rename(columns={'timestamp': 'datetime', 'MW': 'consommation_realisee'})
+
+# 6. Calculer la prime de risque
+calculate_prem_risk_vol(forecast_df=forecast_df,spot_df=spot_df,forward_df=forward_df,plot_chart=True,quantile=70)
+
+
+# 7. Calculer la prime de shape
+calculate_prem_risk_shape(forecast_df=forecast_df,pfc_df=pfc_df,spot_df=spot_df,quantile=70,plot_chart=True)
 
 
 
 
-# Testing the functions
 
-forecast_df  = eval_forecast(input_data, datetime_col='timestamp', target_col='MW')
+
+
+
+
+
+
 #output.to_csv('Markets/TE13/output_data/Prev_C2_ENT3_HCE.csv', index=False, sep=';', encoding='utf-8')
-plot_forecast(input_data, datetime_col='timestamp', target_col='MW')
 
-#output_spot = get_spot_price_fr(my_token, start_date = "2024-06-12", end_date = "2024-09-12")
-#output_forward = get_forward_price_fr_months(my_token, cal_year_month = "2025-03")
-output_pfc = get_pfc_fr(my_token, price_date = 2023, delivery_year = 2024) 
 
-calculate_prem_risk_vol(my_token, input_data, datetime_col='timestamp', target_col='MW', plot_chart=True, quantile = 70, variability_factor = 1.5)
 
-calculate_prem_risk_shape(my_token, input_data, datetime_col='timestamp', target_col='MW', plot_chart=True, quantile=70)
+
 
 
 # Calcul des primes de risque pour chaque fichier CSV dans le dossier
