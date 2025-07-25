@@ -21,8 +21,8 @@ databricks = (
     )
 
 
-INPUT_FOLDER  = Path("Markets/TE13/input_data/")   # dossier des .csv
-OUTPUT_FOLDER = Path("Markets/TE13/premium_risk_charts/")     # sous-dossier d’export
+INPUT_FOLDER  = Path("Markets/STELLANTIS/input_data/")   # dossier des .csv
+OUTPUT_FOLDER = Path("Markets/STELLANTIS/premium_risk_charts/")     # sous-dossier d’export
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)    # crée s'il n’existe pas
 
 
@@ -37,7 +37,7 @@ pfc_df = get_pfc_fr(token=my_token, price_date= cal_year-1 , delivery_year=cal_y
 
 
 # 3. Load input data
-input_data = pd.read_csv(INPUT_FOLDER / 'C2_ENT3_HCE_cdc_historique.csv')
+input_data = pd.read_csv(INPUT_FOLDER / 'C2_ENT3_HCH_cdc_historique.csv')
 input_data['timestamp'] = pd.to_datetime(input_data['timestamp'], utc=True)
 
 
@@ -45,7 +45,6 @@ input_data['timestamp'] = pd.to_datetime(input_data['timestamp'], utc=True)
 temp_start_date = input_data['timestamp'].min().strftime('%Y-%m-%d')
 temp_end_date = input_data['timestamp'].max().strftime('%Y-%m-%d')
 temp_df = get_temp_smoothed_fr(temp_start_date, temp_end_date)
-
 
 # 5. Génerer le forecast sur l'année civile complète
 forecast_df = eval_forecast(input_data, temp_df=temp_df, cal_year=cal_year, datetime_col='timestamp', target_col='MW')

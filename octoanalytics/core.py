@@ -553,7 +553,7 @@ def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
 
     return df
 
-def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, forward_df: pd.DataFrame, plot_chart: bool = False, quantile: int = 50, variability_factor: float = 1.1, save_path: Optional[str] = None) -> float:
+def calculate_prem_risk_vol(forecast_df: pd.DataFrame,spot_df: pd.DataFrame,forward_df: pd.DataFrame,quantile: int = 70,plot_chart: bool = False,variability_factor: float = 1.1,save_path: Optional[str] = None) -> float:
     """
     Calcule la prime de risque volume à partir des prévisions de consommation, des prix spot et 
     d’un ensemble de prix forward. Cette prime mesure l’impact de l’erreur de prévision sur la valeur 
@@ -562,15 +562,18 @@ def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, fo
     Paramètres :
     -----------
     forecast_df : pd.DataFrame
-        Données de consommation et prévisions, avec colonnes ['datetime', 'forecast', 'consommation_realisee'] en MW.
+        Données de consommation et prévisions, contenant :
+            - une colonne 'timestamp' (datetime)
+            - une colonne 'forecast' (prévisions de consommation en MW)
+            - une colonne 'MW' (consommation réalisée en MW)
     spot_df : pd.DataFrame
         Données de prix spot avec les colonnes ['delivery_from', 'price_eur_per_mwh'].
     forward_df : pd.DataFrame
         Liste des prix forward (calendaires ou autres), avec au minimum la colonne ['forward_price'].
+    quantile : int, par défaut 70
+        Le quantile à extraire (entre 1 et 100) de la distribution des primes calculées.
     plot_chart : bool, par défaut False
         Si True, affiche un graphique interactif de la distribution des primes de risque volume.
-    quantile : int, par défaut 50
-        Le quantile à extraire (entre 1 et 100) de la distribution des primes calculées.
     variability_factor : float, par défaut 1.1
         Facteur multiplicatif appliqué à l’erreur de prévision pour simuler une incertitude plus élevée.
     save_path : str, optionnel
@@ -582,33 +585,38 @@ def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, fo
         La valeur du quantile demandé (en €/MWh), représentant la prime de risque volume.
     """
 
-
-    # 1. Nettoyage des dates (datetime naive)
-    forecast_df['datetime'] = pd.to_datetime(forecast_df['datetime']).dt.tz_localize(None)
+    # 1. Conversion des colonnes temporelles en datetime sans timezone
+    forecast_df['timestamp'] = pd.to_datetime(forecast_df['timestamp']).dt.tz_localize(None)
     spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from']).dt.tz_localize(None)
 
-    # 2. Détection de l'année du forecast
-    latest_date = forecast_df['datetime'].max()
+    # 2. Année de référence basée sur la dernière date de prévision
+    latest_date = forecast_df['timestamp'].max()
     latest_year = latest_date.year
     print(f"Using year from latest date: {latest_year} (latest forecast: {latest_date.strftime('%Y-%m-%d')})")
 
-    # 3. Validation des prix forward
+    # 3. Vérification des prix forward
     if forward_df.empty:
         raise ValueError("No forward prices provided.")
     forward_prices = forward_df['forward_price'].tolist()
 
-    # 4. Jointure spot + forecast
-    merged_df = pd.merge(forecast_df, spot_df, left_on='datetime', right_on='delivery_from', how='inner')
+    # 4. Jointure forecast + spot
+    merged_df = pd.merge(
+        forecast_df,
+        spot_df,
+        left_on='timestamp',
+        right_on='delivery_from',
+        how='inner'
+    )
     if merged_df.empty:
-        raise ValueError("No data available to merge spot and forecast")
+        raise ValueError("No data available to merge spot and forecast.")
 
-    # 5. Calcul de la différence de consommation simulée
-    merged_df['diff_conso'] = (merged_df['consommation_realisee'] - merged_df['forecast']) * variability_factor
-    conso_totale_MWh = merged_df['consommation_realisee'].sum()
+    # 5. Simulation de l’erreur de prévision (écart entre réel et prévu)
+    merged_df['diff_conso'] = (merged_df['MW'] - merged_df['forecast']) * variability_factor
+    conso_totale_MWh = merged_df['MW'].sum()
     if conso_totale_MWh == 0:
-        raise ValueError("Annual consumption is zero, division not possible")
+        raise ValueError("Annual consumption is zero, division not possible.")
 
-    # 6. Boucle sur chaque prix forward
+    # 6. Calcul de la prime de risque pour chaque prix forward
     premiums = []
     for fwd_price in forward_prices:
         merged_df['diff_price'] = merged_df['price_eur_per_mwh'] - fwd_price
@@ -616,7 +624,7 @@ def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, fo
         premium = abs(merged_df['produit'].sum()) / conso_totale_MWh
         premiums.append(premium)
 
-    # 7. Graphique interactif
+    # 7. Visualisation de la distribution (optionnel)
     if plot_chart or save_path:
         premiums_sorted = sorted(premiums)
         fig = go.Figure()
@@ -630,7 +638,7 @@ def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, fo
         fig.update_layout(
             title="Risk premium distribution (volume)",
             xaxis_title="Index (sorted)",
-            yaxis_title="Premium",
+            yaxis_title="Premium (€/MWh)",
             plot_bgcolor='black',
             paper_bgcolor='black',
             font=dict(color='white'),
@@ -642,27 +650,31 @@ def calculate_prem_risk_vol(forecast_df: pd.DataFrame, spot_df: pd.DataFrame, fo
         if plot_chart:
             fig.show()
 
-    # 8. Calcul du quantile
+    # 8. Extraction du quantile demandé
     if not (1 <= quantile <= 100):
         raise ValueError("Quantile must be an integer between 1 and 100.")
     quantile_value = np.percentile(premiums, quantile)
-    print(f"Quantile {quantile} = {quantile_value:.4f}")
+    print(f"Quantile {quantile} risque volume = {quantile_value:.4f} €/MWh")
     return float(quantile_value)
 
-def calculate_prem_risk_shape(forecast_df: pd.DataFrame, pfc_df: pd.DataFrame, spot_df: pd.DataFrame, quantile: int = 70, plot_chart: bool = False, save_path: Optional[str] = None) -> float:
+def calculate_prem_risk_shape(forecast_df: pd.DataFrame,pfc_df: pd.DataFrame,spot_df: pd.DataFrame,quantile: int = 70,plot_chart: bool = False,save_path: Optional[str] = None) -> float:
     """
-    Calcule la prime de risque de shape à partir d'une prévision de consommation, des prix forward (PFC) 
-    et des prix spot. Le résultat représente une mesure statistique du risque pris lorsqu'on achète un 
-    produit à profil plat et qu'on revend au profil réel sur le marché spot.
+    Calcule la prime de risque de shape à partir d'une prévision de consommation, des prix forward (PFC)
+    et des prix spot. Le résultat représente une mesure du risque pris lorsqu'on achète un produit
+    à profil plat et qu'on revend au profil réel sur le marché spot.
 
     Paramètres :
     -----------
     forecast_df : pd.DataFrame
-        Prévisions de consommation avec les colonnes ['datetime', 'forecast'] en MW.
+        Données de prévision de consommation, avec :
+            - une colonne 'timestamp' (datetime)
+            - une colonne 'forecast' (prévisions de consommation en MW)
     pfc_df : pd.DataFrame
-        Données de prix forward avec les colonnes ['delivery_from', 'forward_price', 'price_date'].
+        Données de prix forward (PFC) avec les colonnes :
+            ['delivery_from', 'forward_price', 'price_date'].
     spot_df : pd.DataFrame
-        Données de prix spot avec les colonnes ['delivery_from', 'price_eur_per_mwh'].
+        Données de prix spot avec les colonnes :
+            ['delivery_from', 'price_eur_per_mwh'].
     quantile : int, par défaut 70
         Le quantile à extraire de la distribution des coûts shape (en valeur absolue).
     plot_chart : bool, par défaut False
@@ -676,24 +688,23 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame, pfc_df: pd.DataFrame, s
         La valeur du quantile demandé (en €/MWh), mesurant la prime de risque de shape.
     """
 
-
-    # 1. Traitement des données de prévision de consommation
+    # 1. Prétraitement de la prévision de consommation
     df_conso_prev = forecast_df.copy()
-    df_conso_prev = df_conso_prev.rename(columns={'datetime': 'delivery_from'})
+    df_conso_prev = df_conso_prev.rename(columns={'timestamp': 'delivery_from'})
     df_conso_prev['delivery_from'] = pd.to_datetime(df_conso_prev['delivery_from'], utc=True)
     df_conso_prev['forecast'] = df_conso_prev['forecast'] / 1_000_000  # Conversion MW -> GWh
 
-    # 2. Traitement des données de prix forward (PFC)
+    # 2. Prétraitement des données PFC
     pfc = pfc_df.copy()
     pfc['delivery_from'] = pd.to_datetime(pfc['delivery_from'], utc=True)
 
-    # 3. Fusion PFC + prévision conso
+    # 3. Fusion PFC + prévisions conso (jour)
     df = pd.merge(pfc, df_conso_prev[['delivery_from', 'forecast']], on='delivery_from', how='left').dropna()
     df['value'] = df['forward_price'] * df['forecast']
-    df['delivery_month'] = pd.to_datetime(df['delivery_from'].dt.tz_localize(None)).dt.to_period('M')  # Mois de livraison
+    df['delivery_month'] = pd.to_datetime(df['delivery_from'].dt.tz_localize(None)).dt.to_period('M')
     df['price_date'] = pfc['price_date']
 
-    # 4. Agrégation mensuelle (profil plat)
+    # 4. Agrégation mensuelle pour simuler un profil plat
     gb_month = df.groupby(['price_date', 'delivery_month']).agg(
         bl_volume_month=('forecast', 'mean'),
         bl_value_month=('value', 'sum'),
@@ -702,20 +713,20 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame, pfc_df: pd.DataFrame, s
     gb_month['bl_value_month'] = gb_month['bl_value_month'] / gb_month['forward_price_sum_month']
     gb_month.reset_index(inplace=True)
 
-    # 5. Traitement des données spot
+    # 5. Prétraitement des données spot
     spot = spot_df.copy()
     spot = spot.rename(columns={'price_eur_per_mwh': 'spot_price'})
     spot['delivery_from'] = pd.to_datetime(spot['delivery_from'], utc=True)
 
-    # 6. Fusion complète des données PFC + conso + spot
+    # 6. Fusion conso + PFC + spot
     df = df.merge(spot[['delivery_from', 'spot_price']], on='delivery_from', how='left').dropna()
     df = df.merge(gb_month, on=['price_date', 'delivery_month'], how='left').dropna()
 
-    # 7. Calcul des résiduels (écart conso réelle - profil plat)
+    # 7. Calcul des volumes résiduels entre profil réel et plat
     df['residual_volume'] = df['forecast'] - df['bl_value_month']
     df['residual_value'] = df['residual_volume'] * df['spot_price']
 
-    # 8. Agrégation des coûts résiduels mensuels
+    # 8. Agrégation mensuelle des coûts shape
     agg = df.groupby(['price_date']).agg(
         residual_value_month=('residual_value', 'sum'),
         conso_month=('forecast', 'sum')
@@ -723,10 +734,9 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame, pfc_df: pd.DataFrame, s
     agg['shape_cost'] = agg['residual_value_month'] / agg['conso_month']
     agg['abs_shape_cost'] = agg['shape_cost'].abs()
 
-    # 9. Affichage graphique interactif (optionnel)
+    # 9. Affichage graphique (optionnel)
     if plot_chart or save_path:
         sorted_vals = agg['abs_shape_cost'].sort_values().reset_index(drop=True)
-
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             y=sorted_vals,
@@ -752,12 +762,8 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame, pfc_df: pd.DataFrame, s
 
     # 10. Extraction du quantile souhaité
     quantile_value = np.percentile(agg['abs_shape_cost'], quantile)
-    print(f"Quantile {quantile} = {quantile_value:.4f} €/MWh")
-
+    print(f"Quantile {quantile} risque shape = {quantile_value:.4f} €/MWh")
     return float(quantile_value)
-
-
-
 
 
 
