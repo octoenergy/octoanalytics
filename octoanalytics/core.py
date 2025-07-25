@@ -31,7 +31,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from typing import Optional
 from databricks import sql
-
+from yaspin import yaspin
+import pandas as pd
+from databricks import sql
 
 
 def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
@@ -333,11 +335,10 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFram
         les dates/heures de livraison et les prix spot correspondants.
     """
 
+    # 1. Initialisation du spinner de chargement avec yaspin
+    with yaspin(text="Chargement des prix spot depuis Databricks...", color="cyan") as spinner:
 
-    # 1. Initialisation de la barre de progression avec tqdm
-    with tqdm(total=1, desc="Loading spot prices from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
-
-        # 2. Connexion à Databricks avec le token personnel
+        # 2. Connexion à Databricks via token personnel
         connection = sql.connect(
             server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
             http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
@@ -346,7 +347,7 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFram
 
         cursor = connection.cursor()
 
-        # 3. Requête SQL pour récupérer les prix spot entre start_date et end_date
+        # 3. Construction et exécution de la requête SQL pour récupérer les prix spot entre start_date et end_date
         query = f"""
             SELECT delivery_from, price_eur_per_mwh
             FROM consumer.inter_energymarkets_epex_hh_spot_prices
@@ -360,21 +361,23 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFram
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
 
-        # 4. Conversion des résultats en DataFrame pandas
-        spot_df = pd.DataFrame(rows, columns=columns)
-
-        # 5. Fermeture du curseur et de la connexion
+        # 4. Fermeture du curseur et de la connexion
         cursor.close()
         connection.close()
 
-        # 6. Mise à jour de la barre de progression
-        pbar.update(1)
+        # 5. Indication de succès via le spinner (affiche une coche verte)
+        spinner.ok("✅")
 
-    # 7. Nettoyage des données : conversion en datetime sans fuseau et en float pour les prix
+    # 6. Conversion des résultats en DataFrame pandas
+    spot_df = pd.DataFrame(rows, columns=columns)
+
+    # 7. Nettoyage et typage des colonnes
     spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from'], utc=True).dt.tz_localize(None)
     spot_df['price_eur_per_mwh'] = spot_df['price_eur_per_mwh'].astype(float)
 
+    # 8. Retour du DataFrame final avec les prix spot
     return spot_df
+
 
 def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
     """
@@ -394,9 +397,8 @@ def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
         dates de trading, les prix forward correspondants et l’année civile associée.
     """
 
-
-    # 1. Initialisation de la barre de progression
-    with tqdm(total=1, desc="Loading forward prices from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
+    # 1. Initialisation du spinner de chargement avec yaspin
+    with yaspin(text="Chargement des prix forward depuis Databricks...", color="cyan") as spinner:
 
         # 2. Connexion à Databricks via token personnel
         connection = sql.connect(
@@ -407,7 +409,7 @@ def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
 
         cursor = connection.cursor()
 
-        # 3. Requête SQL pour extraire les prix forward pour l’année cal_year
+        # 3. Construction et exécution de la requête SQL pour récupérer les prix forward de l’année cal_year
         query = f"""
             SELECT setllement_price AS forward_price, trading_date
             FROM consumer.stg_eex_power_future_results_fr 
@@ -421,22 +423,24 @@ def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
 
-        # 4. Conversion des résultats en DataFrame pandas
-        forward_df = pd.DataFrame(rows, columns=columns)
-
-        # 5. Fermeture du curseur et de la connexion
+        # 4. Fermeture du curseur et de la connexion
         cursor.close()
         connection.close()
 
-        # 6. Mise à jour de la barre de progression
-        pbar.update(1)
+        # 5. Indication de succès via le spinner (affiche une coche verte)
+        spinner.ok("✅")
+
+    # 6. Conversion des résultats en DataFrame pandas
+    forward_df = pd.DataFrame(rows, columns=columns)
 
     # 7. Nettoyage et typage des colonnes
     forward_df['trading_date'] = pd.to_datetime(forward_df['trading_date'], utc=True)
     forward_df['forward_price'] = forward_df['forward_price'].astype(float)
     forward_df['cal_year'] = cal_year
 
+    # 8. Retour du DataFrame final avec les prix forward annuels
     return forward_df
+
 
 def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame:
     """
@@ -456,7 +460,6 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
         contenant les dates de trading, les prix forward mensuels et le mois associé.
     """
 
-
     # 1. Calcul des bornes temporelles pour le mois donné
     start_date = datetime.strptime(cal_year_month, "%Y-%m")
     end_date = start_date + relativedelta(months=1)
@@ -470,8 +473,10 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
         "?HTTPPath=/sql/1.0/warehouses/ddb864eabbe6b908"
     )
 
-    # 3. Requête et récupération des données avec barre de progression
-    with tqdm(total=1, desc="Loading forward prices from Databricks", bar_format='{l_bar}{bar} [elapsed: {elapsed}]') as pbar:
+    # 3. Initialisation du spinner yaspin pour indiquer le chargement
+    with yaspin(text="Chargement des prix forward mensuels depuis Databricks...", color="cyan") as spinner:
+        
+        # 4. Connexion et récupération des données via tio.db
         with tio.db(databricks_url) as client:
             query = f"""
                 SELECT setllement_price, trading_date, delivery_start, delivery_end
@@ -483,22 +488,26 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
                 ORDER BY trading_date
             """
             forward_df = client.get_df(query)
-            pbar.update(1)
 
-    # 4. Nettoyage des données et renommage des colonnes
+        # 5. Indication de succès via le spinner (affiche une coche verte)
+        spinner.ok("✅")
+
+    # 6. Nettoyage des données et renommage des colonnes
     forward_df.rename(columns={'setllement_price': 'forward_price'}, inplace=True)
     forward_df['trading_date'] = pd.to_datetime(forward_df['trading_date'], utc=True)
     forward_df['forward_price'] = forward_df['forward_price'].astype(float)
     forward_df['cal_year'] = cal_year_month
 
-    # 5. Suppression des doublons éventuels
+    # 7. Suppression des doublons éventuels
     forward_df = forward_df.drop_duplicates()
 
+    # 8. Retour du DataFrame final avec les prix forward mensuels
     return forward_df
+
 
 def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
     """
-    Récupère les courbes de prix forward (« PFC ») pour la France depuis Databricks.
+    Récupère les courbes de prix Price Forward Curve (« PFC ») pour la France depuis Databricks.
 
     Paramètres :
     -----------
@@ -516,42 +525,49 @@ def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
         correspondant aux dates de livraison, date de prix et prix forward associés.
     """
 
+    # 1. Initialisation du spinner yaspin pour indiquer le chargement
+    with yaspin(text="Chargement des courbes de prix forward depuis Databricks...", color="cyan") as spinner:
 
-    # 1. Connexion à la base Databricks avec token personnel
-    connection = sql.connect(
-        server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
-        http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
-        access_token=token
-    )
+        # 2. Connexion à la base Databricks avec token personnel
+        connection = sql.connect(
+            server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
+            http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
+            access_token=token
+        )
 
-    cursor = connection.cursor()
+        cursor = connection.cursor()
 
-    # 2. Requête SQL pour récupérer les données filtrées sur mode, asset, année livraison et année date prix
-    query = f"""
-        SELECT delivery_from,
-               price_date,
-               forward_price
-        FROM consumer.stg_octo_curves
-        WHERE mode = 'EOD'
-          AND asset = 'FRPX'
-          AND year(delivery_from) = '{delivery_year}'
-          AND year(price_date) = '{price_date}'
-        ORDER BY price_date
-    """
+        # 3. Requête SQL pour récupérer les données filtrées sur mode, asset, année livraison et année date prix
+        query = f"""
+            SELECT delivery_from,
+                   price_date,
+                   forward_price
+            FROM consumer.stg_octo_curves
+            WHERE mode = 'EOD'
+              AND asset = 'FRPX'
+              AND year(delivery_from) = '{delivery_year}'
+              AND year(price_date) = '{price_date}'
+            ORDER BY price_date
+        """
 
-    # 3. Exécution de la requête et récupération des résultats
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    colnames = [desc[0] for desc in cursor.description]
+        # 4. Exécution de la requête et récupération des résultats
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        colnames = [desc[0] for desc in cursor.description]
 
-    # 4. Conversion en DataFrame pandas avec noms des colonnes
+        # 5. Fermeture des connexions
+        cursor.close()
+        connection.close()
+
+        # 6. Indication de succès via le spinner (affiche une coche verte)
+        spinner.ok("✅")
+
+    # 7. Conversion en DataFrame pandas avec noms des colonnes
     df = pd.DataFrame(rows, columns=colnames)
 
-    # 5. Fermeture des connexions
-    cursor.close()
-    connection.close()
-
+    # 8. Retour du DataFrame final avec les courbes de prix forward
     return df
+
 
 def calculate_prem_risk_vol(forecast_df: pd.DataFrame,spot_df: pd.DataFrame,forward_df: pd.DataFrame,quantile: int = 70,plot_chart: bool = False,variability_factor: float = 1.1,save_path: Optional[str] = None) -> float:
     """
