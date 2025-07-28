@@ -1,12 +1,3 @@
-from octoanalytics import get_temp_smoothed_fr
-from octoanalytics import eval_forecast
-from octoanalytics import plot_forecast
-from octoanalytics import get_spot_price_fr
-from octoanalytics import get_forward_price_fr_annual
-from octoanalytics import get_pfc_fr
-from octoanalytics import calculate_prem_risk_vol
-from octoanalytics import calculate_prem_risk_shape
-
 from pathlib import Path
 import pandas as pd
 

@@ -1,12 +1,3 @@
-from octoanalytics import get_temp_smoothed_fr
-from octoanalytics import eval_forecast
-from octoanalytics import plot_forecast
-from octoanalytics import get_spot_price_fr
-from octoanalytics import get_forward_price_fr_annual
-from octoanalytics import get_pfc_fr
-from octoanalytics import calculate_prem_risk_vol
-from octoanalytics import calculate_prem_risk_shape
-
 from pathlib import Path
 import pandas as pd
 
@@ -45,10 +36,13 @@ input_data['timestamp'] = pd.to_datetime(input_data['timestamp'], utc=True)
 temp_start_date = input_data['timestamp'].min().strftime('%Y-%m-%d')
 temp_end_date = input_data['timestamp'].max().strftime('%Y-%m-%d')
 temp_df = get_temp_smoothed_fr(temp_start_date, temp_end_date)
+temp_df['timestamp'] = temp_df['timestamp'].dt.tz_convert('UTC') if temp_df['timestamp'].dt.tz else temp_df['timestamp'].dt.tz_localize('UTC')
+temp_df['datetime'] = temp_df['datetime'].dt.tz_convert('UTC') if temp_df['datetime'].dt.tz else temp_df['datetime'].dt.tz_localize('UTC')
 
 
 # 5. Génerer le forecast sur l'année civile complète
-forecast_df = eval_forecast(input_data, temp_df=temp_df, cal_year=cal_year, datetime_col='timestamp', target_col='MW')
+#forecast_df = eval_forecast(input_data, temp_df=temp_df, cal_year=cal_year, datetime_col='timestamp', target_col='MW')
+forecast_df = eval_forecast(input_data, temp_df, cal_year=2024, plot_chart=True)
 
 
 # 6. Calculer la prime de risque

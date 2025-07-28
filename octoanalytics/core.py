@@ -34,6 +34,10 @@ from databricks import sql
 from yaspin import yaspin
 import pandas as pd
 from databricks import sql
+import requests
+import urllib3
+import pandas as pd
+from tqdm import tqdm
 
 
 def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
@@ -106,42 +110,58 @@ def get_temp_smoothed_fr(start_date: str, end_date: str) -> pd.DataFrame:
     # 10. Retourne uniquement la colonne datetime et la température moyenne lissée (réinitialisation de l'index)
     return df_all[['temperature']].reset_index()
 
-def eval_forecast(df, temp_df, cal_year, datetime_col='timestamp', target_col='MW'):
+def eval_forecast(df, temp_df, cal_year=None, datetime_col='timestamp', target_col='MW', plot_chart=False, save_path=None):
     """
-    Génère un forecast pour l’année civile cal_year si les données d'entrée couvrent bien cette période.
+    Calcule un forecast (et éventuellement affiche un graphique) pour une année donnée.
 
     Paramètres :
     -----------
     df : pd.DataFrame
-        Données historiques avec colonnes incluant datetime_col et target_col.
+        Données historiques contenant au moins les colonnes datetime_col et target_col.
     temp_df : pd.DataFrame
-        Données de température lissée avec colonnes ['datetime', 'temperature'].
-    cal_year : int
-        Année civile sur laquelle faire le forecast.
+        Données de température avec colonnes ['datetime', 'temperature'].
+    cal_year : int ou None, optionnel (par défaut None)
+        Année civile pour laquelle générer la prévision. Obligatoire si plot_chart=True.
     datetime_col : str, optionnel (par défaut 'timestamp')
-        Nom de la colonne datetime dans df.
+        Nom de la colonne contenant les timestamps dans df.
     target_col : str, optionnel (par défaut 'MW')
-        Nom de la colonne cible (valeur à prédire) dans df.
+        Nom de la colonne cible à prédire dans df.
+    plot_chart : bool, optionnel (par défaut False)
+        Indique si un graphique interactif Plotly doit être généré.
+    save_path : str ou None, optionnel
+        Chemin pour sauvegarder le graphique HTML si plot_chart est True.
 
     Retour :
-    -------
+    --------
     pd.DataFrame
-        DataFrame contenant datetime_col, target_col et la colonne 'forecast' correspondant à la prévision.
+        DataFrame contenant les colonnes datetime_col, target_col et 'forecast' (prévision).
     """
 
+    # 1. Vérifie la cohérence des paramètres
+    #    - Nécessité de fournir cal_year si on souhaite afficher un graphique
+    if cal_year is None and plot_chart:
+        raise ValueError("Vous devez fournir `cal_year` si vous souhaitez générer un graphique.")
 
-    np.random.seed(42)  # 1. Fixe la graine aléatoire pour reproductibilité
+    # 2. Fixe la graine aléatoire pour assurer la reproductibilité des résultats du modèle
+    np.random.seed(42)
+
+    # 3. Copie des données d'origine pour éviter modifications involontaires
     df = df.copy()
 
-    # 2. Nettoyage basique et uniformisation du datetime
+    # 4. Uniformise la colonne datetime
+    #    - Conversion en datetime avec fuseau UTC pour standardiser
+    #    - Suppression du fuseau (naïve) pour éviter conflits lors des jointures/fusions
     df[datetime_col] = pd.to_datetime(df[datetime_col], utc=True).dt.tz_localize(None)
+
+    # 5. Suppression des lignes où datetime ou target est manquant
     df = df.dropna(subset=[datetime_col, target_col])
+
+    # 6. Tri chronologique des données et ré-indexation
     df = df.sort_values(datetime_col).reset_index(drop=True)
 
-    # 3. Vérification que les données couvrent bien toute l'année cal_year
+    # 7. Vérification que les données couvrent toute l’année cal_year
     expected_start = pd.Timestamp(f"{cal_year}-01-01 00:00:00")
     expected_end = pd.Timestamp(f"{cal_year}-12-31 23:59:59")
-
     if not ((df[datetime_col] <= expected_start).any() and (df[datetime_col] >= expected_end).any()):
         raise ValueError(
             f"Les données ne couvrent pas toute l’année civile {cal_year}.\n"
@@ -149,29 +169,38 @@ def eval_forecast(df, temp_df, cal_year, datetime_col='timestamp', target_col='M
             f"Données disponibles de {df[datetime_col].min().date()} à {df[datetime_col].max().date()}"
         )
 
-    # 4. Définition de la période de test sur l'année cal_year
+    # 8. Définition explicite de la période de test correspondant à l’année de forecast
     test_start = expected_start
     test_end = expected_end
 
-    # 5. Nettoyage et préparation des données température
-    temp_df[datetime_col] = pd.to_datetime(temp_df['datetime'])
+    # 9. Préparation et nettoyage des données de température
+    temp_df = temp_df.copy()
+    # Conversion en datetime avec fuseau UTC, puis suppression du fuseau pour homogénéité
+    temp_df[datetime_col] = pd.to_datetime(temp_df['datetime'], utc=True).dt.tz_localize(None)
     temp_df = temp_df.drop(columns=['datetime'])
 
-    # 6. Fusion des températures avec les données principales
+    # 10. Fusion des données météo avec les données principales sur datetime_col
     df = pd.merge(df, temp_df, on=datetime_col, how='left')
-    df['temperature'] = df['temperature'].ffill().bfill()  # Remplissage des valeurs manquantes
 
-    # 7. Fonction interne pour ajouter des variables dérivées (features)
+    # 11. Remplissage des valeurs manquantes de température par propagation avant puis arrière
+    df['temperature'] = df['temperature'].ffill().bfill()
+
+    # 12. Ajout des features temporelles et météo utiles à la modélisation
     def add_features(df):
+        # Extraction des composantes temporelles classiques
         df['hour'] = df[datetime_col].dt.hour
         df['dayofweek'] = df[datetime_col].dt.dayofweek
         df['month'] = df[datetime_col].dt.month
+
+        # Encodage cyclique pour les composantes périodiques (heure, jour de la semaine, mois)
         df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
         df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
         df['dayofweek_sin'] = np.sin(2 * np.pi * df['dayofweek'] / 7)
         df['dayofweek_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
         df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
         df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+
+        # Autres variables temporelles pertinentes
         df['minute'] = df[datetime_col].dt.minute
         df['is_weekend'] = (df['dayofweek'] >= 5).astype(int)
         df['dayofyear'] = df[datetime_col].dt.dayofyear
@@ -179,141 +208,83 @@ def eval_forecast(df, temp_df, cal_year, datetime_col='timestamp', target_col='M
         df['quarter'] = df[datetime_col].dt.quarter
         df['is_month_start'] = df[datetime_col].dt.is_month_start.astype(int)
         df['is_month_end'] = df[datetime_col].dt.is_month_end.astype(int)
-        
-        # 7a. Ajout d'indicateurs de jours fériés français
+
+        # Jours fériés français
         fr_holidays = holidays.country_holidays('FR')
         df['is_holiday'] = df[datetime_col].dt.date.astype(str).isin(fr_holidays).astype(int)
 
-        # 7b. Indicateurs de chauffage/climatisation
+        # Indicateurs chauffage/climatisation basés sur la température
         df['heating_on'] = (df['temperature'] < 15).astype(int)
         df['cooling_on'] = (df['temperature'] > 25).astype(int)
 
-        # 7c. Variables température transformées (différences seuil)
+        # Variables supplémentaires liées à la température (transformation)
         df['temp_below_10'] = np.maximum(0, 10 - df['temperature'])
         df['temp_above_30'] = np.maximum(0, df['temperature'] - 30)
         df['temp_diff_15'] = df['temperature'] - 15
+
         return df
 
     df = add_features(df)
-    df = df.dropna().reset_index(drop=True)  # 8. Suppression des lignes avec valeurs manquantes
 
-    # 9. Split en données d'entraînement et test (test = année cal_year)
+    # 13. Suppression des lignes avec des valeurs manquantes éventuelles après enrichissement
+    df = df.dropna().reset_index(drop=True)
+
+    # 14. Séparation des données en ensembles d'entraînement et de test
+    #     - Train = données hors de l’année cal_year
+    #     - Test = données durant l’année cal_year
     train_df = df[(df[datetime_col] < test_start) | (df[datetime_col] > test_end)].copy()
     test_df = df[(df[datetime_col] >= test_start) & (df[datetime_col] <= test_end)].copy()
 
+    # 15. Vérification de la taille suffisante des données d'entraînement
     if len(train_df) < 1000:
         raise ValueError("Pas assez de données pour entraîner le modèle.")
 
-    # 10. Entraînement du modèle Random Forest sur les features dérivées
+    # 16. Entraînement d’un modèle Random Forest sur les features dérivées
     features = [col for col in train_df.columns if col not in [datetime_col, target_col]]
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(train_df[features], train_df[target_col])
 
-    # 11. Prédiction sur la période test
+    # 17. Prédiction sur la période test (année cal_year)
     test_df['forecast'] = model.predict(test_df[features])
 
-    # 12. Retour des résultats : datetime, valeur réelle, et prévision
+    # 18. Affichage optionnel d’un graphique interactif avec Plotly
+    if plot_chart:
+        y_true = test_df[target_col].values
+        y_pred = test_df['forecast'].values
+        mask = y_true != 0  # Exclusion des zéros pour le calcul du MAPE
+        mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=test_df[datetime_col], y=test_df[target_col],
+            mode='lines', name='Valeurs réelles', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(
+            x=test_df[datetime_col], y=test_df['forecast'],
+            mode='lines', name='Prévision', line=dict(color='red', dash='dash')))
+
+        fig.update_layout(
+            title=f'Prévision vs Réel — MAPE: {mape:.2f}%',
+            xaxis_title='Date',
+            yaxis_title=target_col,
+            hovermode='x unified',
+            template='plotly_white',
+            plot_bgcolor='black',
+            paper_bgcolor='black',
+            font=dict(color='white'),
+            legend=dict(x=0.01, y=0.99, font=dict(color='white')),
+            xaxis=dict(color='white', gridcolor='gray'),
+            yaxis=dict(color='white', gridcolor='gray'),
+            margin=dict(t=100)
+        )
+
+        if save_path:
+            fig.write_html(save_path)
+            print(f"Graph saved as interactive HTML at: {save_path}")
+        else:
+            fig.show()
+
+    # 19. Retourne les résultats : datetime, valeur réelle, et prévision
     return test_df[[datetime_col, target_col, 'forecast']]
-
-
-
-
-
-
-    df = add_features(df)
-
-    # Ajouter les lags au DataFrame global pour cohérence
-    df['lag_1'] = df[target_col].shift(1)
-    df['lag_48'] = df[target_col].shift(48)
-    df['lag_336'] = df[target_col].shift(336)
-
-    df = df.dropna().reset_index(drop=True)
-
-    # Réappliquer split après l'ajout des lags
-    train_df = df[(df[datetime_col] < test_start) | (df[datetime_col] > test_end)].copy()
-    test_df = df[(df[datetime_col] >= test_start) & (df[datetime_col] <= test_end)].copy()
-
-    # Sélection des features
-    features = [col for col in train_df.columns if col not in [datetime_col, target_col]]
-
-    # Modèle
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(train_df[features], train_df[target_col])
-
-    # Prédictions
-    test_df['forecast'] = model.predict(test_df[features])
-
-    return test_df[[datetime_col, target_col, 'forecast']]
-
-def plot_forecast(df, temp_df, datetime_col='timestamp', target_col='MW', save_path=None):
-    """
-    Génère un graphique interactif comparant les valeurs réelles et la prévision issue de eval_forecast,
-    avec calcul du MAPE (Mean Absolute Percentage Error).
-
-    Paramètres :
-    -----------
-    df : pd.DataFrame
-        Données historiques contenant au moins datetime_col et target_col.
-    temp_df : pd.DataFrame
-        Données de température pour passer à eval_forecast.
-    datetime_col : str, optionnel (par défaut 'timestamp')
-        Nom de la colonne datetime dans df.
-    target_col : str, optionnel (par défaut 'MW')
-        Nom de la colonne cible dans df.
-    save_path : str ou None, optionnel
-        Chemin de sauvegarde du graphique au format HTML. Si None, le graphique s'affiche directement.
-
-    Retour :
-    -------
-    fig : plotly.graph_objs._figure.Figure
-        Figure Plotly générée.
-    """
-
-
-    # 1. Appel à eval_forecast pour obtenir les prévisions
-    forecast_df = eval_forecast(df, temp_df=temp_df, datetime_col=datetime_col, target_col=target_col)
-
-    # 2. Calcul du MAPE (Mean Absolute Percentage Error) en ignorant les valeurs nulles
-    y_true = forecast_df[target_col].values
-    y_pred = forecast_df['forecast'].values
-    mask = y_true != 0
-    mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
-
-    # 3. Création du graphique interactif avec Plotly
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=forecast_df[datetime_col], y=forecast_df[target_col],
-        mode='lines', name='Valeurs réelles', line=dict(color='blue')
-    ))
-    fig.add_trace(go.Scatter(
-        x=forecast_df[datetime_col], y=forecast_df['forecast'],
-        mode='lines', name='Prévision', line=dict(color='red', dash='dash')
-    ))
-
-    # 4. Mise en forme du graphique (layout) avec thème sombre et légende
-    fig.update_layout(
-        title=f'Prévision vs Réel — MAPE: {mape:.2f}%',
-        xaxis_title='Date',
-        yaxis_title=target_col,
-        hovermode='x unified',
-        template='plotly_white',
-        plot_bgcolor='black',
-        paper_bgcolor='black',
-        font=dict(color='white'),
-        legend=dict(x=0.01, y=0.99, font=dict(color='white')),
-        xaxis=dict(color='white', gridcolor='gray'),
-        yaxis=dict(color='white', gridcolor='gray'),
-        margin=dict(t=100)
-    )
-
-    # 5. Enregistrement du graphique au format HTML ou affichage direct
-    if save_path:
-        fig.write_html(save_path)
-        print(f"Graph saved as interactive HTML at: {save_path}")
-    else:
-        fig.show()
-
-    return fig
 
 def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
@@ -704,7 +675,7 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame,pfc_df: pd.DataFrame,spo
     df_conso_prev = forecast_df.copy()
     df_conso_prev = df_conso_prev.rename(columns={'timestamp': 'delivery_from'})
     df_conso_prev['delivery_from'] = pd.to_datetime(df_conso_prev['delivery_from'], utc=True)
-    df_conso_prev['forecast'] = df_conso_prev['forecast'] / 1_000_000  # Conversion MW -> GWh
+    df_conso_prev['forecast'] = df_conso_prev['forecast'] / 1_000_000  # Conversion de Wh en MWh
 
     # 2. Prétraitement des données PFC
     pfc = pfc_df.copy()

@@ -74,16 +74,6 @@ forecast_df = eval_forecast(df=load_df(), temp_df=temp_df, cal_year=2024)
 
 ---
 
-### 📈 Interactive plot
-
-```python
-from octoanalytics import plot_forecast
-
-plot_forecast(df=load_df(), temp_df=temp_df)
-```
-
----
-
 ### 💰 Risk premium calculation
 
 #### Volume Risk
