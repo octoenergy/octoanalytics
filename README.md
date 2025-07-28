@@ -6,183 +6,149 @@
 
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**octoanalytics** is a Python package by **Octopus Energy** providing tools for quantitative analysis and risk calculation on energy data. It facilitates analyzing energy consumption time series, incorporating temperature data, forecasting consumption, retrieving market prices, and computing risk premiums.
+# octoanalytics 📊⚡
+
+**Energy consumption forecasting & risk premium analysis for the French electricity market**
 
 ---
 
-## Key Features
+## Description
 
-- **Smoothed Temperature Retrieval**: Fetches hourly smoothed temperature data for major French cities and computes a national average.
-- **Energy Consumption Forecasting**: Gradient Boosting model based on time features and temperature.
-- **Interactive Plotting**: Visualize forecasts vs actual consumption with MAPE annotation.
-- **Spot and Forward Price Data**: Functions to query EPEX spot prices and EEX forward prices from Databricks.
-- **Risk Premium Calculation**: Computes risk premiums from forward price curves and forecast errors.
-- **Data Preprocessing**: Automatic feature engineering, imputation, and scaling.
+
+`octoanalytics` is a Python toolkit for:
+
+- Retrieving and smoothing **weather data** via Open-Meteo API.
+- Training and evaluating **load forecasting models** (MW) using Random Forest.
+- Generating **interactive visualizations** comparing actual vs. forecasted values.
+- Accessing **spot and forward price data** (annual, monthly, PFC) from **Databricks SQL**.
+- Computing **volume and shape risk premiums**, key for energy portfolio management.
 
 ---
 
 ## Installation
 
-To install `octoanalytics`, use:
-
 ```bash
 pip install octoanalytics
 ```
 
-Dependencies such as `pandas`, `numpy`, `scikit-learn`, `holidays`, `plotly`, `tqdm`, and `tentaclio` will be installed automatically.
+> ⚠️ You need a valid Databricks access token to retrieve market data.
 
 ---
 
-## Usage
+## Dependencies
 
-### Importing the package
+- `pandas`
+- `numpy`
+- `scikit-learn`
+- `plotly`
+- `matplotlib`
+- `tqdm`
+- `requests`
+- `tentaclio`
+- `yaspin`
+- `holidays`
+- `dotenv`
+- `databricks-sql-connector`
 
-```python
-from octoanalytics import eval_forecast, plot_forecast, calculate_mape, get_temp_smoothed_fr, get_spot_price_fr, get_forward_price_fr, get_pfc_fr, calculate_prem_risk_vol
-```
+---
 
-### Data format for forecasting
+## Main Features
 
-The input data should be a DataFrame with at least:
-
-- A datetime column (default named `'datetime'`)
-- A consumption column (default named `'consumption'`)
-
-Example:
-
-```python
-import pandas as pd
-
-data = pd.DataFrame({
-    'datetime': ['2025-01-01 00:00', '2025-01-01 01:00', '2025-01-01 02:00'],
-    'consumption': [120.5, 115.3, 113.7]
-})
-
-data['datetime'] = pd.to_datetime(data['datetime'])
-```
-
-### Forecasting energy consumption
-
-Use the `eval_forecast` function to train and predict consumption:
+### 🔁 Weather data retrieval and smoothing
 
 ```python
-forecast_df = eval_forecast(data)
-print(forecast_df.head())
-```
+from octoanalytics import get_temp_smoothed_fr
 
-This returns the test set with a `'forecast'` column containing predicted values.
-
-### Plotting forecasts
-
-Visualize actual vs predicted consumption with:
-
-```python
-plot_forecast(data)
-```
-
-### Calculate MAPE (Mean Absolute Percentage Error)
-
-```python
-mape_value = calculate_mape(data)
-print(f"MAPE: {mape_value:.2f}%")
-```
-
-### Retrieve smoothed temperature data for France
-
-```python
-temp_df = get_temp_smoothed_fr('2025-01-01', '2025-01-31')
-print(temp_df.head())
-```
-
-### Retrieve spot prices for French electricity market
-
-Requires a Databricks token:
-
-```python
-spot_prices = get_spot_price_fr(token='your_token_here', start_date='2025-01-01', end_date='2025-01-31')
-print(spot_prices.head())
-```
-
-### Retrieve forward prices and Price Forward Curve (PFC)
-
-```python
-forward_prices = get_forward_price_fr(token='your_token_here', cal_year=2026)
-pfc = get_pfc_fr(token='your_token_here', cal_year=2026)
-```
-
-### Calculate premium risk volatility
-
-```python
-premium = calculate_prem_risk_vol(token='your_token_here', input_df=data, datetime_col='datetime', target_col='consumption', plot_chart=True, quantile=50)
-print(f"Risk premium at 50th percentile: {premium}")
+temp_df = get_temp_smoothed_fr(start_date="2024-01-01", end_date="2024-12-31")
 ```
 
 ---
 
-## Function Descriptions
+### ⚡ Load forecasting
 
-### `eval_forecast(df, datetime_col='datetime', target_col='consumption')`
+```python
+from octoanalytics import eval_forecast
 
-Trains a Gradient Boosting model using time features and smoothed temperature data to forecast energy consumption. Splits data into train/test sets and returns test data with forecasts.
-
----
-
-### `plot_forecast(df, datetime_col='datetime', target_col='consumption')`
-
-Plots interactive time series comparing actual consumption with forecasts, showing MAPE on the plot.
+forecast_df = eval_forecast(df=load_df(), temp_df=temp_df, cal_year=2024)
+```
 
 ---
 
-### `calculate_mape(df, datetime_col='datetime', target_col='consumption')`
+### 📈 Interactive plot
 
-Returns the MAPE between actual and predicted consumption using the forecasting model.
+```python
+from octoanalytics import plot_forecast
 
----
-
-### `get_temp_smoothed_fr(start_date, end_date)`
-
-Fetches hourly smoothed temperatures averaged over multiple major French cities.
+plot_forecast(df=load_df(), temp_df=temp_df)
+```
 
 ---
 
-### `get_spot_price_fr(token, start_date, end_date)`
+### 💰 Risk premium calculation
 
-Retrieves hourly spot prices for the French electricity market (EPEX) from Databricks.
+#### Volume Risk
+
+```python
+from octoanalytics import calculate_prem_risk_vol
+
+premium = calculate_prem_risk_vol(forecast_df, spot_df, forward_df)
+```
+
+#### Shape Risk
+
+```python
+from octoanalytics import calculate_prem_risk_shape
+
+shape_risk = calculate_prem_risk_shape(forecast_df, pfc_df, spot_df)
+```
 
 ---
 
-### `get_forward_price_fr(token, cal_year)`
+### 🔌 Databricks SQL connections
 
-Fetches annual forward prices for French electricity (EEX) for a specified calendar year.
+```python
+from octoanalytics import get_spot_price_fr, get_forward_price_fr_annual
+
+spot_df = get_spot_price_fr(token=DB_TOKEN, start_date="2024-01-01", end_date="2024-12-31")
+forward_df = get_forward_price_fr_annual(token=DB_TOKEN, cal_year=2025)
+```
 
 ---
 
-### `get_pfc_fr(token, cal_year)`
+## Package Structure
 
-Retrieves and resamples hourly Price Forward Curve data for French electricity (EEX) for a specified calendar year.
-
----
-
-### `calculate_prem_risk_vol(token, input_df, datetime_col, target_col, plot_chart=False, quantile=50)`
-
-Calculates a risk premium based on forecast errors and forward price curves. Returns the premium value for the requested quantile and optionally plots the distribution.
+```
+octoanalytics/
+│
+├── __init__.py
+├── core.py              # Main logic
+├── ...
+```
 
 ---
 
 ## Author
 
-- Jean Bertin  
-- Email: [jean.bertin@octopusenergy.fr](mailto:jean.bertin@octopusenergy.fr)  
-- Status: In development (planning)
+**Jean Bertin**  
+📧 jean.bertin@octopusenergy.fr
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file for details.
+MIT – free to use, modify, and distribute.
 
 ---
 
-## Contributions
+## Roadmap
 
-Contributions are welcome! Please open issues or pull requests on GitHub for suggestions or bug reports.
+- [ ] Add XGBoost model
+- [ ] Load anomaly detection
+- [ ] Flask REST API deployment
+- [ ] Automatic PDF report generation
+
+---
+
+## Full Demo
+
+To be included in `examples/forecast_demo.ipynb`.
