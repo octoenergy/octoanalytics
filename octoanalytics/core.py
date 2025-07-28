@@ -378,7 +378,6 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFram
     # 8. Retour du DataFrame final avec les prix spot
     return spot_df
 
-
 def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
     """
     Récupère les prix forward annuels d’électricité en France pour une année donnée depuis Databricks (EEX).
@@ -440,7 +439,6 @@ def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
 
     # 8. Retour du DataFrame final avec les prix forward annuels
     return forward_df
-
 
 def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame:
     """
@@ -504,7 +502,6 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
     # 8. Retour du DataFrame final avec les prix forward mensuels
     return forward_df
 
-
 def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
     """
     Récupère les courbes de prix Price Forward Curve (« PFC ») pour la France depuis Databricks.
@@ -567,7 +564,6 @@ def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
 
     # 8. Retour du DataFrame final avec les courbes de prix forward
     return df
-
 
 def calculate_prem_risk_vol(forecast_df: pd.DataFrame,spot_df: pd.DataFrame,forward_df: pd.DataFrame,quantile: int = 70,plot_chart: bool = False,variability_factor: float = 1.1,save_path: Optional[str] = None) -> float:
     """
