@@ -286,14 +286,13 @@ def eval_forecast(df, temp_df, cal_year=None, datetime_col='timestamp', target_c
     # 19. Retourne les résultats : datetime, valeur réelle, et prévision
     return test_df[[datetime_col, target_col, 'forecast']]
 
-def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFrame:
+def get_spot_price_fr(start_date: str, end_date: str) -> pd.DataFrame:
     """
-    Récupère les prix spot de l’électricité en France depuis Databricks (marché EPEX spot).
+    Récupère les prix spot de l’électricité en France depuis Databricks (marché EPEX spot)
+    via la connexion simplifiée avec tentaclio.
 
     Paramètres :
     -----------
-    token : str
-        Token personnel d’accès à Databricks.
     start_date : str
         Date de début au format 'YYYY-MM-DD'.
     end_date : str
@@ -306,57 +305,57 @@ def get_spot_price_fr(token: str, start_date: str, end_date: str) -> pd.DataFram
         les dates/heures de livraison et les prix spot correspondants.
     """
 
-    # 1. Initialisation du spinner de chargement avec yaspin
-    with yaspin(text="Chargement des prix spot depuis Databricks...", color="cyan") as spinner:
+    # 1. Initialisation du spinner de chargement avec yaspin (affiche un message pendant l'exécution)
+    with yaspin(text="Chargement des prix spot depuis Databricks...") as spinner:
 
-        # 2. Connexion à Databricks via token personnel
-        connection = sql.connect(
-            server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
-            http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
-            access_token=token
-        )
+        # 2. Connexion à Databricks via tentaclio (gestionnaire de contexte simplifié)
+        databricks = "databricks+thrift://octoenergy-oefr-prod.cloud.databricks.com/"
+        with tio.db(databricks) as client:
 
-        cursor = connection.cursor()
+            # 3. Construction de la requête SQL pour récupérer les prix spot
+            query = f"""
+                SELECT delivery_from, price_eur_per_mwh
+                FROM consumer.inter_energymarkets_epex_hh_spot_prices
+                WHERE source_identifier = 'epex'
+                  AND price_date >= '{start_date}'
+                  AND price_date < '{end_date}'
+                ORDER BY delivery_from
+            """
 
-        # 3. Construction et exécution de la requête SQL pour récupérer les prix spot entre start_date et end_date
-        query = f"""
-            SELECT delivery_from, price_eur_per_mwh
-            FROM consumer.inter_energymarkets_epex_hh_spot_prices
-            WHERE source_identifier = 'epex'
-              AND price_date >= '{start_date}'
-              AND price_date <= '{end_date}'
-            ORDER BY delivery_from
-        """
+            # 4. Récupération du curseur lié à la connexion Databricks
+            cursor = client.cursor
 
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description]
+            # 5. Exécution de la requête SQL sur le serveur Databricks
+            cursor.execute(query)
 
-        # 4. Fermeture du curseur et de la connexion
-        cursor.close()
-        connection.close()
+            # 6. Récupération de toutes les lignes retournées par la requête
+            rows = cursor.fetchall()
 
-        # 5. Indication de succès via le spinner (affiche une coche verte)
+            # 7. Extraction des noms de colonnes depuis la description du curseur
+            columns = [desc[0] for desc in cursor.description]
+
+        # 8. Fin de la tâche : afficher une coche verte dans le spinner pour indiquer le succès
         spinner.ok("✅")
 
-    # 6. Conversion des résultats en DataFrame pandas
+    # 9. Conversion des résultats en DataFrame pandas avec colonnes appropriées
     spot_df = pd.DataFrame(rows, columns=columns)
 
-    # 7. Nettoyage et typage des colonnes
+    # 10. Conversion de la colonne 'delivery_from' en datetime sans fuseau horaire (local naive)
     spot_df['delivery_from'] = pd.to_datetime(spot_df['delivery_from'], utc=True).dt.tz_localize(None)
+
+    # 11. Conversion de la colonne 'price_eur_per_mwh' en float pour faciliter les calculs
     spot_df['price_eur_per_mwh'] = spot_df['price_eur_per_mwh'].astype(float)
 
-    # 8. Retour du DataFrame final avec les prix spot
+    # 12. Retour du DataFrame final contenant les données de prix spot
     return spot_df
 
-def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
+def get_forward_price_fr_annual(cal_year: int) -> pd.DataFrame:
     """
-    Récupère les prix forward annuels d’électricité en France pour une année donnée depuis Databricks (EEX).
+    Récupère les prix forward annuels d’électricité en France pour une année donnée depuis Databricks (EEX),
+    en utilisant une connexion simplifiée via tentaclio.
 
     Paramètres :
     -----------
-    token : str
-        Token personnel d’accès à Databricks.
     cal_year : int
         Année civile de livraison souhaitée (ex. 2026).
 
@@ -367,58 +366,51 @@ def get_forward_price_fr_annual(token: str, cal_year: int) -> pd.DataFrame:
         dates de trading, les prix forward correspondants et l’année civile associée.
     """
 
-    # 1. Initialisation du spinner de chargement avec yaspin
+    # 1. Initialisation du spinner de chargement
     with yaspin(text="Chargement des prix forward depuis Databricks...", color="cyan") as spinner:
 
-        # 2. Connexion à Databricks via token personnel
-        connection = sql.connect(
-            server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
-            http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
-            access_token=token
-        )
+        # 2. Connexion via tentaclio
+        databricks = "databricks+thrift://octoenergy-oefr-prod.cloud.databricks.com/"
+        with tio.db(databricks) as client:
 
-        cursor = connection.cursor()
+            # 3. Construction de la requête SQL
+            query = f"""
+                SELECT setllement_price AS forward_price, trading_date
+                FROM consumer.stg_eex_power_future_results_fr 
+                WHERE long_name = 'EEX French Power Base Year Future' 
+                  AND delivery_start >= '{cal_year}-01-01'
+                  AND delivery_end <= '{cal_year}-12-31'
+                ORDER BY trading_date
+            """
 
-        # 3. Construction et exécution de la requête SQL pour récupérer les prix forward de l’année cal_year
-        query = f"""
-            SELECT setllement_price AS forward_price, trading_date
-            FROM consumer.stg_eex_power_future_results_fr 
-            WHERE long_name = 'EEX French Power Base Year Future' 
-              AND delivery_start >= '{cal_year}-01-01'
-              AND delivery_end <= '{cal_year}-12-31'
-            ORDER BY trading_date
-        """
+            # 4. Exécution de la requête
+            cursor = client.cursor
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
 
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description]
-
-        # 4. Fermeture du curseur et de la connexion
-        cursor.close()
-        connection.close()
-
-        # 5. Indication de succès via le spinner (affiche une coche verte)
+        # 5. Indication de succès via le spinner
         spinner.ok("✅")
 
-    # 6. Conversion des résultats en DataFrame pandas
+    # 6. Transformation en DataFrame
     forward_df = pd.DataFrame(rows, columns=columns)
 
-    # 7. Nettoyage et typage des colonnes
+    # 7. Nettoyage et typage
     forward_df['trading_date'] = pd.to_datetime(forward_df['trading_date'], utc=True)
     forward_df['forward_price'] = forward_df['forward_price'].astype(float)
     forward_df['cal_year'] = cal_year
 
-    # 8. Retour du DataFrame final avec les prix forward annuels
+    # 8. Retour du résultat
     return forward_df
 
-def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame:
+
+def get_forward_price_fr_months(cal_year_month: str) -> pd.DataFrame:
     """
-    Récupère les prix forward mensuels d’électricité en France depuis Databricks (EEX).
+    Récupère les prix forward mensuels d’électricité en France depuis Databricks (EEX),
+    en utilisant une connexion standardisée via tentaclio.
 
     Paramètres :
     -----------
-    token : str
-        Token personnel d’accès à Databricks.
     cal_year_month : str
         Mois de livraison au format 'YYYY-MM' (exemple : '2025-03').
 
@@ -429,24 +421,20 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
         contenant les dates de trading, les prix forward mensuels et le mois associé.
     """
 
-    # 1. Calcul des bornes temporelles pour le mois donné
+    # 1. Calcul des bornes temporelles du mois
     start_date = datetime.strptime(cal_year_month, "%Y-%m")
     end_date = start_date + relativedelta(months=1)
-
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
 
-    # 2. Construction de l'URL de connexion Databricks avec le token
-    databricks_url = (
-        f"databricks+thrift://{token}@octoenergy-oefr-prod.cloud.databricks.com"
-        "?HTTPPath=/sql/1.0/warehouses/ddb864eabbe6b908"
-    )
-
-    # 3. Initialisation du spinner yaspin pour indiquer le chargement
+    # 2. Initialisation du spinner de chargement
     with yaspin(text="Chargement des prix forward mensuels depuis Databricks...", color="cyan") as spinner:
-        
-        # 4. Connexion et récupération des données via tio.db
-        with tio.db(databricks_url) as client:
+
+        # 3. Connexion via tentaclio
+        databricks = "databricks+thrift://octoenergy-oefr-prod.cloud.databricks.com/"
+        with tio.db(databricks) as client:
+
+            # 4. Requête SQL
             query = f"""
                 SELECT setllement_price, trading_date, delivery_start, delivery_end
                 FROM consumer.stg_eex_power_future_results_fr 
@@ -458,29 +446,26 @@ def get_forward_price_fr_months(token: str, cal_year_month: str) -> pd.DataFrame
             """
             forward_df = client.get_df(query)
 
-        # 5. Indication de succès via le spinner (affiche une coche verte)
+        # 5. Fin du chargement
         spinner.ok("✅")
 
-    # 6. Nettoyage des données et renommage des colonnes
+    # 6. Nettoyage et enrichissement
     forward_df.rename(columns={'setllement_price': 'forward_price'}, inplace=True)
     forward_df['trading_date'] = pd.to_datetime(forward_df['trading_date'], utc=True)
     forward_df['forward_price'] = forward_df['forward_price'].astype(float)
     forward_df['cal_year'] = cal_year_month
-
-    # 7. Suppression des doublons éventuels
     forward_df = forward_df.drop_duplicates()
 
-    # 8. Retour du DataFrame final avec les prix forward mensuels
+    # 7. Retour des données
     return forward_df
 
-def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
+
+def get_pfc_fr(price_date: int, delivery_year: int) -> pd.DataFrame:
     """
     Récupère les courbes de prix Price Forward Curve (« PFC ») pour la France depuis Databricks.
 
     Paramètres :
     -----------
-    token : str
-        Token personnel d’accès à Databricks.
     price_date : int
         Année de la date de prix (exemple : 2024).
     delivery_year : int
@@ -493,48 +478,41 @@ def get_pfc_fr(token: str, price_date: int, delivery_year: int) -> pd.DataFrame:
         correspondant aux dates de livraison, date de prix et prix forward associés.
     """
 
-    # 1. Initialisation du spinner yaspin pour indiquer le chargement
+    # 1. Initialisation du spinner yaspin
     with yaspin(text="Chargement des courbes de prix forward depuis Databricks...", color="cyan") as spinner:
 
-        # 2. Connexion à la base Databricks avec token personnel
-        connection = sql.connect(
-            server_hostname="octoenergy-oefr-prod.cloud.databricks.com",
-            http_path="/sql/1.0/warehouses/ddb864eabbe6b908",
-            access_token=token
-        )
+        # 2. Connexion via tentaclio
+        databricks = "databricks+thrift://octoenergy-oefr-prod.cloud.databricks.com/"
+        with tio.db(databricks) as client:
 
-        cursor = connection.cursor()
+            # 3. Construction de la requête SQL
+            query = f"""
+                SELECT delivery_from,
+                       price_date,
+                       forward_price
+                FROM consumer.stg_octo_curves
+                WHERE mode = 'EOD'
+                  AND asset = 'FRPX'
+                  AND year(delivery_from) = '{delivery_year}'
+                  AND year(price_date) = '{price_date}'
+                ORDER BY price_date
+            """
 
-        # 3. Requête SQL pour récupérer les données filtrées sur mode, asset, année livraison et année date prix
-        query = f"""
-            SELECT delivery_from,
-                   price_date,
-                   forward_price
-            FROM consumer.stg_octo_curves
-            WHERE mode = 'EOD'
-              AND asset = 'FRPX'
-              AND year(delivery_from) = '{delivery_year}'
-              AND year(price_date) = '{price_date}'
-            ORDER BY price_date
-        """
+            # 4. Exécution de la requête
+            cursor = client.cursor
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            colnames = [desc[0] for desc in cursor.description]
 
-        # 4. Exécution de la requête et récupération des résultats
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        colnames = [desc[0] for desc in cursor.description]
-
-        # 5. Fermeture des connexions
-        cursor.close()
-        connection.close()
-
-        # 6. Indication de succès via le spinner (affiche une coche verte)
+        # 5. Fin du chargement
         spinner.ok("✅")
 
-    # 7. Conversion en DataFrame pandas avec noms des colonnes
+    # 6. Conversion en DataFrame pandas
     df = pd.DataFrame(rows, columns=colnames)
 
-    # 8. Retour du DataFrame final avec les courbes de prix forward
+    # 7. Retour du DataFrame
     return df
+
 
 def calculate_prem_risk_vol(forecast_df: pd.DataFrame,spot_df: pd.DataFrame,forward_df: pd.DataFrame,quantile: int = 70,plot_chart: bool = False,variability_factor: float = 1.1,save_path: Optional[str] = None) -> float:
     """
@@ -651,6 +629,7 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame,pfc_df: pd.DataFrame,spo
     forecast_df : pd.DataFrame
         Données de prévision de consommation, avec :
             - une colonne 'timestamp' (datetime)
+            - une colonne 'MW' (consommation réalisée en MW)
             - une colonne 'forecast' (prévisions de consommation en MW)
     pfc_df : pd.DataFrame
         Données de prix forward (PFC) avec les colonnes :
@@ -675,7 +654,10 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame,pfc_df: pd.DataFrame,spo
     df_conso_prev = forecast_df.copy()
     df_conso_prev = df_conso_prev.rename(columns={'timestamp': 'delivery_from'})
     df_conso_prev['delivery_from'] = pd.to_datetime(df_conso_prev['delivery_from'], utc=True)
-    df_conso_prev['forecast'] = df_conso_prev['forecast'] / 1_000_000  # Conversion de Wh en MWh
+    #df_conso_prev = df_conso_prev[df_conso_prev['MW'] != 0]
+
+    # Suppression des données du 1er avril au 31 octobre (inclus)
+    df_conso_prev = df_conso_prev[~df_conso_prev['delivery_from'].dt.month.isin(range(4, 11))]
 
     # 2. Prétraitement des données PFC
     pfc = pfc_df.copy()
@@ -683,6 +665,8 @@ def calculate_prem_risk_shape(forecast_df: pd.DataFrame,pfc_df: pd.DataFrame,spo
 
     # 3. Fusion PFC + prévisions conso (jour)
     df = pd.merge(pfc, df_conso_prev[['delivery_from', 'forecast']], on='delivery_from', how='left').dropna()
+    print("Lignes après merge PFC + prévisions :", len(df))
+
     df['value'] = df['forward_price'] * df['forecast']
     df['delivery_month'] = pd.to_datetime(df['delivery_from'].dt.tz_localize(None)).dt.to_period('M')
     df['price_date'] = pfc['price_date']
